@@ -26,13 +26,11 @@ jobs:
           )
           $failed = $false
           foreach ($file in $files) {
-            $tokens = $null
             $errors = $null
-            [System.Management.Automation.PSParser]::Tokenize(
+            $tokens = [System.Management.Automation.PSParser]::Tokenize(
               (Get-Content -LiteralPath $file -Raw),
-              [ref]$tokens,
               [ref]$errors
-            ) | Out-Null
+            )
             if ($errors.Count -gt 0) {
               $failed = $true
               foreach ($parseError in $errors) {
