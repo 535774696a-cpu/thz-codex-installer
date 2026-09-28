@@ -1,0 +1,1 @@
+public static partial class Bootstrap { static readonly System.Collections.Generic.Dictionary<string,string> Resources=new System.Collections.Generic.Dictionary<string,string> { {"InstallerLibrary.ps1","ACFF9B75EEF80058914286CC08ACEBD4CE80CD3C6EFCA70834BEA5830EE6DCBD"},{"Runner.ps1","86898E469B3D4B36D0B5FBD944C56940DA273DF0DB93F93F3CFC8B85F8BBD9E3"} }; }

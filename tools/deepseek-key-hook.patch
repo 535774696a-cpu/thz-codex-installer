@@ -1,0 +1,38 @@
+--- a/exe-src/InstallerLibrary.ps1
++++ b/exe-src/InstallerLibrary.ps1
+@@ -700,30 +700,33 @@
+ function Invoke-DeepSeekKeySetup {
+     param([string]$CodexHome,[string]$ConfigPath,[string]$ModelsPath,$Cfg,[switch]$UseEnvironmentKey)
+     Assert-CodexConfigPaths -CodexHome $CodexHome -ConfigPath $ConfigPath -ModelsPath $ModelsPath
++    $hookKey=[Environment]::GetEnvironmentVariable('THZ_DEEPSEEK_KEY')
++    $hookMode=-not [string]::IsNullOrWhiteSpace($hookKey)
+     for($attempt=0;$attempt -lt 3;$attempt++) {
+-        $res=Show-DeepSeekKeyGuiDialog
++        if($hookMode){$res=@{Ok=$true;Key=$hookKey};$hookKey=$null}else{$res=Show-DeepSeekKeyGuiDialog}
+         if(-not $res.Ok){throw 'KEY_INPUT_CANCELLED'}
+         $key=([string]$res.Key).Trim();$res=$null;$script:GuiKeyResult=$null
+-        if($key.Length -lt 12){[Windows.Forms.MessageBox]::Show('Key 不完整，请重新输入。','特好装')|Out-Null;continue}
++        if($key.Length -lt 12){if($hookMode){$key=$null;$hookKey=$null;throw 'KEY_INVALID'};[Windows.Forms.MessageBox]::Show('Key 不完整，请重新输入。','特好装')|Out-Null;continue}
+         $result=Test-DeepSeekApiWithKey -ApiKey $key
+         if($result -ne 'ok'){
+             $key=$null
++            if($hookMode){throw 'KEY_VALIDATION_FAILED'}
+             $retry=[Windows.Forms.MessageBox]::Show('当前 Key 或网络未能通过验证。是否重新输入？','特好装',[Windows.Forms.MessageBoxButtons]::RetryCancel)
+             if($retry -eq [Windows.Forms.DialogResult]::Retry){continue}
+             throw 'KEY_VALIDATION_FAILED'
+         }
+         $script:DeepSeekBackupDir=Backup-Config -CodexHome $CodexHome -ConfigPath $ConfigPath -ModelsPath $ModelsPath
+         $oldEnv=$null;$hadOldEnv=$false
+         try {
+             if($UseEnvironmentKey){$oldEnv=[Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY',[EnvironmentVariableTarget]::User);$hadOldEnv=$null-ne $oldEnv;[Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY',$key,[EnvironmentVariableTarget]::User)}
+             Write-DeepSeekConfig -ConfigPath $ConfigPath -ModelsPath $ModelsPath -Model $Cfg.model -ProviderId $Cfg.provider_id -ProviderBase $Cfg.provider_base_url -ApiKey $key -ModelsJson $Cfg.models_json -UseEnvironmentKey:$UseEnvironmentKey
+             if(-not(Test-ConfigWritten -ConfigPath $ConfigPath -ProviderId $Cfg.provider_id)){throw 'CONFIG_INVALID'}
+         } catch {
+             if($script:DeepSeekBackupDir){Restore-Backup -BackupDir $script:DeepSeekBackupDir -ConfigPath $ConfigPath -ModelsPath $ModelsPath}
+             if($UseEnvironmentKey){[Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY',$(if($hadOldEnv){$oldEnv}else{$null}),[EnvironmentVariableTarget]::User)}
+             throw
+         } finally {$key=$null}
+         return
+     }
+     throw 'KEY_ATTEMPTS_EXHAUSTED'
+ }

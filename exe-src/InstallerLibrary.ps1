@@ -1,0 +1,789 @@
+﻿#requires -Version 5.1
+<#
+  Install-Codex-AI.ps1
+  Codex + DeepSeek 一键安装器（双模式：deepseek | chatgpt）
+
+  本文件是服务端个性化模板：
+    __BASE_URL__       由服务端在生成 ZIP 时替换为部署地址
+    __INSTALL_TOKEN__  由服务端替换为一次性安装令牌（install_token）
+
+  运行流程：
+    [1/7] 验证安装授权...   POST /api/installer/start（携带 install_token）
+    [2/7] 检测 Windows 环境...
+    [3/7] 按模式分叉：
+      deepseek: 预检（安全清理 stale tmp，独立于是否重装）-> 安装/复用 Codex CLI（仅官方源）
+      chatgpt : Route C 官方 Desktop App 流程（不安装 CLI、不登录、不写配置）
+    然后按模式分叉：
+      deepseek: [4/7] 备份配置  [5/7] 配置 AI 模型（本机输入自己的 Key）
+               [6/7] 验证 Codex  [7/7] 完成
+      chatgpt : [4/7] 检查 Desktop [5/7] 获取官方 Desktop App（仅配置的官方 URL）
+               [6/7] 提醒官方登录 [7/7] 完成
+    成功后 POST /api/installer/complete 标记 install_token consumed。
+
+  Route C（ChatGPT / Codex 会员）最终产品规则：
+    - 只负责：检查 Windows、检查 OpenAI 网络可达性、给出官方 Desktop App 下载动作、
+      提醒用户自行完成 OpenAI 官方账号登录。
+    - 不再：安装 Codex CLI、执行 CLI 登录、要求 DeepSeek Key、
+      修改 ~/.codex/config.toml、注入 DeepSeek Provider、调用 DeepSeek API。
+    - OpenAI 不可访问时停止安装并明确提示"使用 ChatGPT/Codex 会员方式需要当前网络
+      可以正常访问 OpenAI。"；仅当服务器配置了 network_solution_url 才显示"查看网络
+      访问解决方案"，未配置不显示死链接。
+    - 不采集 OpenAI 密码 / Cookie / Session / 登录 Token；不自动安装 VPN、
+      不修改系统代理 / DNS / 证书、不绕过地区限制。
+    - Desktop App 只使用服务器配置的官方下载 URL（desktop_download_url）；
+      不猜测、不镜像、不自建下载源。
+
+  安全约束：
+    - 原始授权码绝不写入安装器；仅携带一次性 install_token。
+    - 模式由服务器决定（deepseek/chatgpt），不依赖本文件或 CMD 里的任何开关。
+    - chatgpt 模式绝不获取/写入 DeepSeek Key，不触碰用户密码/Cookie/auth 上传。
+    - 全程不修改系统代理、防火墙、Winsock、注册表，不删除 .codex 或用户数据。
+#>
+[CmdletBinding()]
+param(
+    [string]$InstallToken = ""
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$ScriptVersion = '4.6.0.0'
+
+# ---- V1 官方 standalone 安装（OpenAI 官方 install.ps1）----
+# V1 主安装路线：官方 Windows standalone（无需 Node/npm）。
+# 官方安装器负责：检测平台 / 下载 / SHA256 校验 / 解压 / 建立 standalone / PATH。
+# 我们的 Installer 只负责调用它 + 用 codex --version 做最终验证。
+$OfficialInstallerUrl = 'https://chatgpt.com/codex/install.ps1'
+$StandaloneBinDir     = Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin'
+$StandaloneExe        = Join-Path $StandaloneBinDir 'codex.exe'
+
+# ---- 服务端替换的占位符 ----
+$BASE_URL       = 'https://thz.quest'
+$TOKEN_EMB      = '__INSTALL_TOKEN__'
+
+# ---- 全局状态 ----
+$script:CodexCliOk = $false
+$script:ModelOk = $false
+$script:DesktopOk = $false
+$script:DesktopNote = ''
+
+function Write-Step {
+    param([int]$N, [string]$Msg)
+    Write-Host "[$N/7] $Msg" -ForegroundColor Cyan
+}
+function Write-Ok  { param([string]$M) Write-Host "[OK] " -ForegroundColor Green -NoNewline; Write-Host $M }
+function Write-Warn{ param([string]$M) Write-Host "[!] "  -ForegroundColor Yellow -NoNewline; Write-Host $M }
+function Write-Fail{ param([string]$M) Write-Host "[X] "  -ForegroundColor Red -NoNewline; Write-Host $M }
+
+# =====================================================================
+# [1/7] 验证安装授权（install_token）并获取模式配置
+# =====================================================================
+function Get-DeviceFingerprint {
+    # Raw identifiers never leave this process and are never printed. The
+    # server receives only this normalized SHA-256 digest.
+    $parts = New-Object System.Collections.Generic.List[string]
+    try {
+        $machineGuid = (Get-ItemProperty -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop).MachineGuid
+        if (-not [string]::IsNullOrWhiteSpace($machineGuid)) {
+            $parts.Add(('machineguid:{0}' -f $machineGuid.Trim().ToLowerInvariant()))
+        }
+    } catch { }
+    try {
+        $uuid = (Get-CimInstance -ClassName Win32_ComputerSystemProduct -ErrorAction Stop).UUID
+        if (-not [string]::IsNullOrWhiteSpace($uuid)) {
+            $normalizedUuid = $uuid.Trim().ToLowerInvariant()
+            if ($normalizedUuid -notin @('00000000-0000-0000-0000-000000000000', 'ffffffff-ffff-ffff-ffff-ffffffffffff')) {
+                $parts.Add(('systemuuid:{0}' -f $normalizedUuid))
+            }
+        }
+    } catch {
+        try {
+            $uuid = (Get-WmiObject -Class Win32_ComputerSystemProduct -ErrorAction Stop).UUID
+            if (-not [string]::IsNullOrWhiteSpace($uuid)) {
+                $normalizedUuid = $uuid.Trim().ToLowerInvariant()
+                if ($normalizedUuid -notin @('00000000-0000-0000-0000-000000000000', 'ffffffff-ffff-ffff-ffff-ffffffffffff')) {
+                    $parts.Add(('systemuuid:{0}' -f $normalizedUuid))
+                }
+            }
+        } catch { }
+    }
+    if ($parts.Count -eq 0) {
+        throw '无法读取稳定的 Windows 设备标识，请联系管理员。'
+    }
+    $normalized = (($parts | Sort-Object) -join '|')
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
+function Invoke-ApiStart {
+    if ([string]::IsNullOrWhiteSpace($InstallToken)) { $InstallToken = $TOKEN_EMB }
+    if ([string]::IsNullOrWhiteSpace($InstallToken) -or $InstallToken -like '*INSTALL_TOKEN*') {
+        throw '缺少安装授权。请回到安装网站重新下载安装包。'
+    }
+    if ($BASE_URL -like '*BASE_URL*') {
+        throw '安装包配置不完整（缺少服务器地址）。请重新下载。'
+    }
+    $deviceFingerprint = Get-DeviceFingerprint
+    $body = @{
+        install_token = $InstallToken
+        device_fingerprint = $deviceFingerprint
+        installer_version = $ScriptVersion
+        os_type = 'windows'
+    } | ConvertTo-Json
+    try {
+        $resp = Invoke-LicenseRequest -Operation 'LICENSE_START' -Path '/api/installer/start' -Body $body -TimeoutSec 30
+        if (-not $resp.ok) { throw ($resp.message) }
+        return $resp
+    } catch {
+        $detail = $null
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            try { $detail = ($_.ErrorDetails.Message | ConvertFrom-Json).message } catch { $detail = $null }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($detail)) { throw $detail }
+        throw ("无法连接安装服务器：{0}" -f $_.Exception.Message)
+    }
+}
+
+function Invoke-ApiComplete {
+    $body = @{ install_token = $InstallToken; device_fingerprint = (Get-DeviceFingerprint) } | ConvertTo-Json
+    try {
+        $null = Invoke-LicenseRequest -Operation 'LICENSE_COMPLETE' -Path '/api/installer/complete' -Body $body -TimeoutSec 20
+    } catch {
+        # 上报失败不影响本地安装结果
+    }
+}
+
+# =====================================================================
+# [2/7] 检测 Windows 环境 + 网络
+# =====================================================================
+function Test-WindowsEnvironment {
+    if ($env:OS -ne 'Windows_NT') { throw '此安装器仅支持 Windows。' }
+    if (-not [Environment]::Is64BitOperatingSystem) { throw 'Codex 需要 64 位 Windows。' }
+    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    if ($arch -eq 'X64') { Write-Ok 'Windows x64 环境正常' }
+    elseif ($arch -eq 'Arm64') { Write-Warn '检测到 ARM64 Windows，将尝试安装官方 ARM64 版本' }
+    else { throw ("不支持的 CPU 架构：{0}" -f $arch) }
+}
+
+# ---------------------------------------------------------------------
+# 网络检测（分层：DNS -> TCP 443 -> HTTP）
+# 关键原则：只要收到 DeepSeek HTTP 服务器的真实响应（2xx/400/401/403/
+# 404/429 等）就说明服务器可达。鉴权错误不是网络错误；只有 DNS 失败 /
+# 连接超时 / 拒绝连接 / TLS 握手失败 / TCP 443 不通 才判定不可达。
+# ---------------------------------------------------------------------
+function Invoke-HttpGetStatus {
+    param([string]$Url, [int]$TimeoutSec = 15)
+    # 返回 [int] HTTP 状态码；仅在真实网络层失败（DNS/TCP/TLS/超时）时抛异常。
+    $client = $null
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+        $client = New-Object System.Net.Http.HttpClient
+        $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+        $resp = $client.GetAsync($Url).GetAwaiter().GetResult()
+        return [int]$resp.StatusCode
+    } finally {
+        if ($client) { $client.Dispose() }
+    }
+}
+
+function Test-Reachable {
+    param([string]$Url)
+    # 任何真实 HTTP 响应（含 400/401/403/404/429）都视为服务器可达；
+    # 只有网络层失败才返回 $false。
+    try {
+        $null = Invoke-HttpGetStatus -Url $Url
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-DeepSeekNetwork {
+    # STEP A：DNS
+    try {
+        $null = Resolve-DnsName -Name api.deepseek.com -ErrorAction Stop
+        Write-Ok 'DNS 解析正常（api.deepseek.com）'
+    } catch {
+        throw '无法解析 api.deepseek.com（DNS 失败）'
+    }
+    # STEP B：TCP 443
+    $tcpOk = Test-NetConnection api.deepseek.com -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue
+    if (-not $tcpOk) {
+        throw '无法连接 api.deepseek.com:443（TCP 连接失败）'
+    }
+    Write-Ok 'HTTPS 端口连通（api.deepseek.com:443）'
+    # STEP C：HTTP —— 只要收到 DeepSeek 服务器响应即可达（鉴权码不视为网络错误）
+    try {
+        $code = Invoke-HttpGetStatus -Url 'https://api.deepseek.com/' -TimeoutSec 15
+        Write-Ok "DeepSeek API 服务器已响应（HTTP $code）"
+    } catch {
+        throw '无法连接 DeepSeek API（api.deepseek.com:443）'
+    }
+}
+
+function Test-DeepSeekApiWithKey {
+    param([string]$ApiKey)
+    Add-Type -AssemblyName System.Net.Http
+    $client=New-Object Net.Http.HttpClient
+    try {
+        $client.Timeout=[TimeSpan]::FromSeconds(20)
+        $null=$client.DefaultRequestHeaders.TryAddWithoutValidation('Authorization',"Bearer $ApiKey")
+        $resp=$client.GetAsync('https://api.deepseek.com/models').GetAwaiter().GetResult()
+        try {if([int]$resp.StatusCode -ge 200 -and [int]$resp.StatusCode -lt 300){return 'ok'};return 'auth_or_api_failed'} finally {$resp.Dispose()}
+    } catch {return 'unreachable'} finally {$client.Dispose()}
+}
+
+function Get-OfficialInstallerScriptPayload {
+    Set-DiagnosticStage 'DOWNLOAD' 'OFFICIAL_SCRIPT_DOWNLOAD_FAILED'
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $resp = Invoke-WebRequest -UseBasicParsing -Uri $OfficialInstallerUrl -Method Get -TimeoutSec 30
+    } catch {
+        $kind = $_.Exception.GetType().FullName
+        $webStatus = $null
+        $cursor = $_.Exception
+        while ($null -ne $cursor) {
+            if ($cursor -is [System.Net.WebException]) {
+                $webStatus = [string]$cursor.Status
+                break
+            }
+            $cursor = $cursor.InnerException
+        }
+        $detail = if ([string]::IsNullOrWhiteSpace($webStatus)) {
+            "异常类型：$kind；$($_.Exception.Message)"
+        } else {
+            "异常类型：$kind；网络状态：$webStatus；$($_.Exception.Message)"
+        }
+        throw ("DeepSeek API 可以访问，但当前网络无法下载 OpenAI 官方 Codex 安装程序。{0}" -f $detail)
+    }
+
+    Set-DiagnosticStage 'PACKAGE_VERIFY' 'OFFICIAL_SCRIPT_VALIDATION_FAILED'
+    $statusCode = [int]$resp.StatusCode
+    $finalUrl = $OfficialInstallerUrl
+    try { $finalUrl = $resp.BaseResponse.ResponseUri.AbsoluteUri } catch {}
+    $finalUri = $null
+    try { $finalUri = [Uri]$finalUrl } catch {}
+    $allowedFinalHosts = @('chatgpt.com', 'releases.openai.com')
+    if ($statusCode -lt 200 -or $statusCode -ge 300) {
+        throw ("OpenAI 官方 Codex 安装程序返回异常状态（HTTP {0}，最终地址：{1}）。" -f $statusCode, $finalUrl)
+    }
+    if ($null -eq $finalUri -or $finalUri.Scheme -ne 'https' -or $allowedFinalHosts -notcontains $finalUri.Host.ToLowerInvariant()) {
+        throw ("OpenAI 官方 Codex 安装程序重定向到了非预期地址：{0}" -f $finalUrl)
+    }
+
+    $contentType = [string]$resp.Headers['Content-Type']
+    $contentTypePresent = -not [string]::IsNullOrWhiteSpace($contentType)
+    $mediaType = if ($contentTypePresent) { ($contentType -split ';', 2)[0].Trim().ToLowerInvariant() } else { '' }
+    $allowedMediaTypes = @('text/plain', 'application/octet-stream', 'text/x-powershell', 'application/x-powershell')
+    if ($contentTypePresent -and $allowedMediaTypes -notcontains $mediaType) {
+        throw ("OpenAI 官方 Codex 安装程序 Content-Type 异常：{0}" -f $contentType)
+    }
+
+    $raw = $resp.Content
+    if ($raw -is [string]) { $raw = [System.Text.Encoding]::UTF8.GetBytes([string]$raw) }
+    $raw = [byte[]]$raw
+    $text = [System.Text.Encoding]::UTF8.GetString($raw)
+    $looksPowerShell = ($text -match '(?im)\bparam\s*\(' -or $text -match '(?im)\bfunction\s+' -or $text -match 'releases\.openai\.com')
+    if ($raw.Length -lt 1000 -or -not $looksPowerShell -or $text -match '(?i)<!doctype|<html|not found') {
+        throw 'OpenAI 官方安装器下载内容异常（可能为 HTML 错误页或非脚本内容），放弃该来源。'
+    }
+
+    return [PSCustomObject]@{
+        Bytes       = $raw
+        StatusCode  = $statusCode
+        FinalUrl    = $finalUrl
+        ContentType = $contentType
+        Length      = $raw.Length
+    }
+}
+
+function Test-NetworkByMode {
+    param([string]$Mode)
+    if ($Mode -eq 'deepseek') {
+        Test-DeepSeekNetwork
+    } else {
+        if (-not (Test-Reachable 'https://chatgpt.com') -and -not (Test-Reachable 'https://auth.openai.com')) {
+            Write-Fail '使用 ChatGPT/Codex 会员方式需要当前网络可以正常访问 OpenAI。'
+            Write-Host '（本安装器不会自动安装 VPN、不会修改系统代理、DNS、证书，也不会绕过地区限制。）'
+            throw '使用 ChatGPT/Codex 会员方式需要当前网络可以正常访问 OpenAI。'
+        }
+        Write-Ok 'OpenAI 官方登录服务可达'
+    }
+}
+
+# =====================================================================
+# [3/7] 安装 Codex CLI（仅官方渠道）
+# =====================================================================
+function Get-CodexCommand {
+    # V1 优先官方 standalone expected path（%LOCALAPPDATA%\Programs\OpenAI\Codex\bin）。
+    # 原因：当前 PowerShell 会话的 PATH 可能尚未刷新（官方安装器只更新了 User PATH），
+    # 或 PATH 中存在其他来源的 codex shim（npm / sandbox 等）。
+    # 直接使用 expected standalone 路径做验证，不因 console 未刷新 PATH 而误判失败。
+    if (Test-Path -LiteralPath $StandaloneExe) { return $StandaloneExe }
+    $cmd = Get-Command codex -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    return $null
+}
+
+# [LEGACY / SUPPORT_ONLY] 方案 B：从 openai/codex 官方 GitHub Releases 直接下载官方资产。
+# V1 主安装路线不再调用本函数（主路线 = 官方 standalone install.ps1，官方脚本自带
+# releases.openai.com + GitHub fallback）。本函数保留仅作支持/排查用途，不删除。
+# 不依赖 api.github.com（部分网络环境会 403/限流），tag 通过 github.com/releases/latest 重定向解析。
+
+
+
+
+
+
+function Get-ExistingCodexClassification {
+    if (Test-Path -LiteralPath $StandaloneExe) {
+        try {
+            $ver = Invoke-CodexProbe -Command $StandaloneExe -TimeoutSec 20
+            if (-not [string]::IsNullOrWhiteSpace($ver)) {
+                return @{ Status = 'standalone'; Version = $ver }
+            }
+        } catch {}
+        return @{ Status = 'conflict'; Reason = 'standalone_present_but_invalid'; Version = $null }
+    }
+    $cmd = Get-Command codex -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $low = ([string]$cmd.Source).ToLowerInvariant()
+        if ($low -match 'node_modules|\\npm\\|roaming\\npm') {
+            return @{ Status = 'conflict'; Reason = 'npm_codex_present'; Version = $null }
+        }
+        return @{ Status = 'conflict'; Reason = 'unknown_codex_present'; Version = $null }
+    }
+    return @{ Status = 'none'; Version = $null }
+}
+
+# ---------------------------------------------------------------------
+# V1 主安装方式：OpenAI 官方 Windows standalone install.ps1
+# 流程：
+#   1) 下载官方 install.ps1（校验内容确为 PowerShell 脚本，防 HTML 错误页）
+#   2) 以官方非交互模式运行（CODEX_NON_INTERACTIVE=1 跳过官方脚本的交互 prompt）
+#   3) 外部 5 分钟超时兜底：官方脚本内嵌的"codex.exe --version 验证"在无交互
+#      自动执行环境可能挂起；若 standalone 已落地且 codex --version 有效，视为成功
+#   4) 不静默 fallback 到 npm（Node/npm 不是 V1 前置）
+# ---------------------------------------------------------------------
+function Install-CodexCliFromOfficialStandalone {
+    param([Parameter(Mandatory = $true)]$InstallerPayload)
+    $tmp = Join-Path $env:TEMP ("codex-official-{0}.ps1" -f ([guid]::NewGuid().ToString('N')))
+    $proc = $null
+    try {
+        [System.IO.File]::WriteAllBytes($tmp, [byte[]]$InstallerPayload.Bytes)
+
+        Write-Host '    正在通过 OpenAI 官方安装器安装 Codex（下载约 130MB，请稍候）…'
+        # 官方非交互模式只作用于该子进程；不写 User/System Environment。
+        $inner = '& "' + $tmp + '"'
+        $enc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($inner))
+        $info = New-Object Diagnostics.ProcessStartInfo
+        $info.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + $enc
+        $info.UseShellExecute = $false
+        $info.CreateNoWindow = $true
+        $info.RedirectStandardOutput = $true
+        $info.RedirectStandardError = $true
+        $info.EnvironmentVariables['CODEX_NON_INTERACTIVE'] = '1'
+        $proc = New-Object Diagnostics.Process
+        $proc.StartInfo = $info
+        Write-InstallProcessEvent -State 'install_process_started'
+        if (-not $proc.Start()) { throw 'OFFICIAL_INSTALL_START_FAILED' }
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $done = $proc.WaitForExit(300000)  # 官方安装器下载+解压+安装，5 分钟上限
+        if (-not $done) {
+            try { $proc.Kill() } catch {}
+            $proc.WaitForExit()
+            $stdout = $stdoutTask.Result
+            $stderr = $stderrTask.Result
+            Write-InstallProcessEvent -State 'install_process_failed' -TimedOut $true -ExceptionType 'System.TimeoutException' -Stdout $stdout -Stderr $stderr
+            $script:diagnosticCode = 'OFFICIAL_INSTALL_TIMEOUT'
+            throw 'OFFICIAL_INSTALL_TIMEOUT'
+        }
+        $proc.WaitForExit()
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+        if ($proc.ExitCode -ne 0) {
+            Write-InstallProcessEvent -State 'install_process_failed' -ExitCode ([string]$proc.ExitCode) -ExceptionType 'System.InvalidOperationException' -Stdout $stdout -Stderr $stderr
+            # 仅当 THZ 用预期绝对路径再次验证 codex.exe --version 成功时继续；
+            # PATH/config/final verify 仍在后续强制执行。
+            $installedVersion = $null
+            if (Test-Path -LiteralPath $StandaloneExe -PathType Leaf) {
+                try { $installedVersion = Invoke-CodexProbe -Command $StandaloneExe -TimeoutSec 20 } catch {}
+            }
+            if ([string]::IsNullOrWhiteSpace($installedVersion)) { throw 'OFFICIAL_INSTALL_FAILED' }
+            Write-Warn '官方安装器末端验证返回非零，已通过 standalone 绝对路径验证；继续完成 PATH 与最终验证。'
+            return $true
+        }
+        Write-InstallProcessEvent -State 'install_process_completed' -ExitCode '0' -Stdout $stdout -Stderr $stderr
+        if (-not (Test-Path -LiteralPath $StandaloneExe)) {
+            throw 'OFFICIAL_INSTALL_OUTPUT_MISSING'
+        }
+        return $true
+    } catch {
+        if ($_.Exception.Message -notin @('OFFICIAL_INSTALL_TIMEOUT','OFFICIAL_INSTALL_FAILED')) {
+            Write-InstallProcessEvent -State 'install_process_failed' -ExceptionType ($_.Exception.GetType().FullName)
+        }
+        throw
+    } finally {
+        if ($null -ne $proc) { $proc.Dispose() }
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
+
+
+function Get-CodexHome {
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) { return $env:CODEX_HOME }
+    return (Join-Path $HOME '.codex')
+}
+
+function Assert-CodexConfigPaths {
+    param([string]$CodexHome, [string]$ConfigPath, [string]$ModelsPath)
+    if ([string]::IsNullOrWhiteSpace($CodexHome) -or -not [IO.Path]::IsPathRooted($CodexHome)) { throw 'CONFIG_HOME_INVALID' }
+    $expectedHome = Get-CodexHome
+    if ([string]::IsNullOrWhiteSpace($expectedHome) -or -not [IO.Path]::IsPathRooted($expectedHome)) { throw 'CONFIG_HOME_INVALID' }
+    try {
+        $canonicalHome = [IO.Path]::GetFullPath($CodexHome).TrimEnd([char[]]@('\','/'))
+        $canonicalExpected = [IO.Path]::GetFullPath($expectedHome).TrimEnd([char[]]@('\','/'))
+        if (-not [string]::Equals($canonicalHome,$canonicalExpected,[StringComparison]::OrdinalIgnoreCase)) { throw 'CONFIG_HOME_INVALID' }
+        foreach ($entry in @(@($ConfigPath,'config.toml'),@($ModelsPath,'models.json'))) {
+            if ([string]::IsNullOrWhiteSpace($entry[0]) -or -not [IO.Path]::IsPathRooted($entry[0])) { throw 'CONFIG_HOME_INVALID' }
+            if (-not [string]::Equals([IO.Path]::GetFullPath($entry[0]),(Join-Path $canonicalHome $entry[1]),[StringComparison]::OrdinalIgnoreCase)) { throw 'CONFIG_HOME_INVALID' }
+        }
+    } catch { throw 'CONFIG_HOME_INVALID' }
+}
+
+function Backup-Config {
+    param([string]$CodexHome, [string]$ConfigPath, [string]$ModelsPath)
+    Assert-CodexConfigPaths -CodexHome $CodexHome -ConfigPath $ConfigPath -ModelsPath $ModelsPath
+    $ts = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $backupDir = Join-Path $CodexHome ("backups\{0}" -f $ts)
+    New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+    if (Test-Path -LiteralPath $ConfigPath) {
+        Copy-Item -LiteralPath $ConfigPath -Destination (Join-Path $backupDir 'config.toml') -Force
+    }
+    if (Test-Path -LiteralPath $ModelsPath) {
+        Copy-Item -LiteralPath $ModelsPath -Destination (Join-Path $backupDir 'models.json') -Force
+    }
+    Write-Ok "已备份原有配置 -> $backupDir"
+    return $backupDir
+}
+
+function Restore-Backup {
+    param([string]$BackupDir, [string]$ConfigPath, [string]$ModelsPath)
+    Write-Warn '配置校验失败，恢复备份…'
+    if (Test-Path -LiteralPath (Join-Path $BackupDir 'config.toml')) {
+        Copy-Item -LiteralPath (Join-Path $BackupDir 'config.toml') -Destination $ConfigPath -Force
+        Write-Ok 'config.toml 已恢复'
+    } elseif (Test-Path -LiteralPath $ConfigPath) {
+        Remove-Item -LiteralPath $ConfigPath -Force
+        Write-Ok 'config.toml 已移除（安装前不存在）'
+    }
+    if (Test-Path -LiteralPath (Join-Path $BackupDir 'models.json')) {
+        Copy-Item -LiteralPath (Join-Path $BackupDir 'models.json') -Destination $ModelsPath -Force
+        Write-Ok 'models.json 已恢复'
+    } elseif (Test-Path -LiteralPath $ModelsPath) {
+        Remove-Item -LiteralPath $ModelsPath -Force
+        Write-Ok 'models.json 已移除（安装前不存在）'
+    }
+}
+
+function Set-OfficialAccountConfig {
+    param([string]$CodexHome, [string]$ConfigPath, [string]$ModelsPath)
+    Assert-CodexConfigPaths -CodexHome $CodexHome -ConfigPath $ConfigPath -ModelsPath $ModelsPath
+    $backupDir = Backup-Config -CodexHome $CodexHome -ConfigPath $ConfigPath -ModelsPath $ModelsPath
+    $tempPath = "$ConfigPath.thz-official.tmp"
+    try {
+        $lines = if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) { [IO.File]::ReadAllLines($ConfigPath) } else { @() }
+        $result = New-Object Collections.Generic.List[string]
+        $inTopLevel = $true
+        $activeKeys = 'model','model_provider','preferred_auth_method','forced_login_method','model_reasoning_effort','model_catalog_json'
+        foreach ($line in $lines) {
+            if ($line -match '^\s*\[') { $inTopLevel = $false }
+            $drop = $false
+            if ($inTopLevel) { foreach ($key in $activeKeys) { if ($line -match ('^\s*' + [regex]::Escape($key) + '\s*=')) { $drop = $true; break } } }
+            if (-not $drop) { $result.Add($line) }
+        }
+        if ($result.Count -eq 0) { $result.Add('# Codex official account route uses official provider defaults.') }
+        $utf8NoBom = New-Object Text.UTF8Encoding($false)
+        [IO.File]::WriteAllLines($tempPath,$result,$utf8NoBom)
+        $check = [IO.File]::ReadAllText($tempPath)
+        $top = ($check -split '(?m)^\s*\[')[0]
+        foreach ($key in $activeKeys) { if ($top -match ('(?m)^\s*' + [regex]::Escape($key) + '\s*=')) { throw 'OFFICIAL_PROVIDER_CONFIG_INVALID' } }
+        Move-Item -LiteralPath $tempPath -Destination $ConfigPath -Force
+        return $backupDir
+    } catch {
+        if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+        Restore-Backup -BackupDir $backupDir -ConfigPath $ConfigPath -ModelsPath $ModelsPath
+        throw 'OFFICIAL_PROVIDER_CONFIG_FAILED'
+    }
+}
+
+# =====================================================================
+# DeepSeek 模式 [4/7]：配置 DeepSeek 为默认 Provider / 模型
+# =====================================================================
+function Write-DeepSeekConfig {
+    param(
+        [string]$ConfigPath, [string]$ModelsPath, [string]$Model,
+        [string]$ProviderId, [string]$ProviderBase, [string]$ApiKey, [string]$ModelsJson,
+        [switch]$UseEnvironmentKey
+    )
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+    $parsed = $ModelsJson | ConvertFrom-Json
+    $slugs = @($parsed.models | ForEach-Object { $_.slug })
+    if ($slugs -notcontains $Model) { throw "models.json 中缺少默认模型 $Model" }
+    $targetKeys = @('model','model_provider','preferred_auth_method','forced_login_method',
+                    'model_reasoning_effort','model_catalog_json')
+    $lines = if (Test-Path -LiteralPath $ConfigPath) {
+        [System.IO.File]::ReadAllLines($ConfigPath)
+    } else { @() }
+
+    $preserved = New-Object System.Collections.Generic.List[string]
+    $inSection = $false; $skip = $false
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        if ($trimmed.StartsWith('[')) {
+            $inSection = $true
+            $secName = $trimmed.Trim('[', ']').Trim()
+            $skip = ($secName -eq "model_providers.$ProviderId")
+            if (-not $skip) { $preserved.Add($line) }
+            continue
+        }
+        if ($skip) { continue }
+        if (-not $inSection -and -not $trimmed.StartsWith('#') -and $trimmed.Contains('=')) {
+            $eq = $trimmed.IndexOf('=')
+            $k = $trimmed.Substring(0, $eq).Trim().Trim('"', "'")
+            if ($targetKeys -contains $k) { continue }
+        }
+        $preserved.Add($line)
+    }
+
+    $catalogValue = $ModelsPath -replace '\\', '/'
+    $out = New-Object System.Collections.Generic.List[string]
+    $out.Add("model = `"$Model`"")
+    $out.Add("model_provider = `"$ProviderId`"")
+    $out.Add('preferred_auth_method = "apikey"')
+    $out.Add('forced_login_method = "api"')
+    $out.Add('model_reasoning_effort = "high"')
+    $out.Add("model_catalog_json = `"$catalogValue`"")
+    $out.Add('')
+    foreach ($l in $preserved) { $out.Add($l) }
+    if ($out[$out.Count - 1] -ne '') { $out.Add('') }
+    $out.Add("[model_providers.$ProviderId]")
+    $out.Add("name = `"$ProviderId`"")
+    $out.Add("base_url = `"$ProviderBase`"")
+    $out.Add('wire_api = "responses"')
+    if ($UseEnvironmentKey) { $out.Add('env_key = "DEEPSEEK_API_KEY"') }
+    else { $out.Add("experimental_bearer_token = `"$ApiKey`"") }
+
+    # TOML keys are scoped by table. Only root keys must be unique here;
+    # keys such as command/type/url may legitimately repeat in unrelated
+    # MCP/provider tables preserved from the user's existing configuration.
+    $seen = @{}; $inTopLevel = $true
+    foreach ($l in $out) {
+        $t = $l.Trim()
+        if ($t.StartsWith('[')) { $inTopLevel = $false; continue }
+        if (-not $inTopLevel -or $t.StartsWith('#') -or $t -eq '') { continue }
+        if ($t.Contains('=')) {
+            $eq = $t.IndexOf('=')
+            $k = $t.Substring(0, $eq).Trim().Trim('"', "'")
+            if ($seen.ContainsKey($k)) { throw "生成的 config.toml 出现重复顶层键：$k" }
+            $seen[$k] = $true
+        }
+    }
+    $suffix = [guid]::NewGuid().ToString('N')
+    $configTmp = "$ConfigPath.$suffix.tmp"
+    $modelsTmp = "$ModelsPath.$suffix.tmp"
+    try {
+        # Build and validate both candidates before replacing either live file.
+        [System.IO.File]::WriteAllText($configTmp, (($out -join "`n") + "`n"), $utf8NoBom)
+        [System.IO.File]::WriteAllText($modelsTmp, $ModelsJson.TrimEnd("`r", "`n") + "`n", $utf8NoBom)
+        $candidateConfig = [System.IO.File]::ReadAllText($configTmp, [Text.Encoding]::UTF8)
+        $candidateModels = [System.IO.File]::ReadAllText($modelsTmp, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        if ($candidateConfig -notmatch ('(?m)^model_provider\s*=\s*"' + [regex]::Escape($ProviderId) + '"\s*$')) { throw 'CONFIG_CANDIDATE_INVALID' }
+        if ($candidateConfig -notmatch ('(?m)^\[model_providers\.' + [regex]::Escape($ProviderId) + '\]\s*$')) { throw 'CONFIG_CANDIDATE_INVALID' }
+        if (@($candidateModels.models | ForEach-Object { $_.slug }) -notcontains $Model) { throw 'MODELS_CANDIDATE_INVALID' }
+        Move-Item -LiteralPath $modelsTmp -Destination $ModelsPath -Force
+        Move-Item -LiteralPath $configTmp -Destination $ConfigPath -Force
+        # Re-read the committed files; outer Invoke-DeepSeekKeySetup restores
+        # the backup if either commit or post-write validation fails.
+        $committedModels = [System.IO.File]::ReadAllText($ModelsPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        $committedConfig = [System.IO.File]::ReadAllText($ConfigPath, [Text.Encoding]::UTF8)
+        if (@($committedModels.models | ForEach-Object { $_.slug }) -notcontains $Model -or $committedConfig -notmatch ('(?m)^model_provider\s*=\s*"' + [regex]::Escape($ProviderId) + '"\s*$')) { throw 'CONFIG_COMMIT_INVALID' }
+    } finally {
+        if (Test-Path -LiteralPath $configTmp) { Remove-Item -LiteralPath $configTmp -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $modelsTmp) { Remove-Item -LiteralPath $modelsTmp -Force -ErrorAction SilentlyContinue }
+    }
+    Write-Ok "已写入 AI 模型配置：$ConfigPath"
+}
+
+# =====================================================================
+# DeepSeek 本地 Key 输入（V2：Key 只在客户本机，绝不上传服务器）
+# =====================================================================
+function Mask-Key {
+    param([string]$Key)
+    if ([string]::IsNullOrWhiteSpace($Key)) { return '<empty>' }
+    if ($Key.Length -le 8) { return '****' }
+    return $Key.Substring(0, 4) + '****' + $Key.Substring($Key.Length - 4)
+}
+
+function Show-DeepSeekKeyGuiDialog {
+    # 独立 Windows GUI 输入窗口（PowerShell + System.Windows.Forms，原生）。
+    # 输入框使用密码样式掩码（UseSystemPasswordChar），支持 Ctrl+V / 右键粘贴 / 完整字符串。
+    # 返回 Hashtable：@{ Ok=$true; Key='...' } 确认；@{ Ok=$false; Key='' } 取消。
+    # Key 只存在于本 PowerShell 进程内存，不写文件、不进日志/URL/命令行参数/环境变量。
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    $script:GuiKeyResult = $null
+    $script:GuiKeyBox = $null
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Codex AI Installer'
+    $form.Size = New-Object System.Drawing.Size(480, 250)
+    $form.StartPosition = 'CenterScreen'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.TopMost = $true
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text = "请输入你的 DeepSeek API Key`n`nKey 只在当前电脑处理，`n不会上传服务器。"
+    $lbl.Location = New-Object System.Drawing.Point(24, 18)
+    $lbl.Size = New-Object System.Drawing.Size(420, 64)
+    $lbl.Font = New-Object System.Drawing.Font('Microsoft YaHei', 10)
+
+    $txt = New-Object System.Windows.Forms.TextBox
+    $txt.Location = New-Object System.Drawing.Point(24, 96)
+    $txt.Size = New-Object System.Drawing.Size(420, 28)
+    $txt.Font = New-Object System.Drawing.Font('Microsoft YaHei', 11)
+    $txt.UseSystemPasswordChar = $true   # 密码样式掩码，不显示完整 Key
+    $script:GuiKeyBox = $txt
+
+    $btnOk = New-Object System.Windows.Forms.Button
+    $btnOk.Text = '确认'
+    $btnOk.Location = New-Object System.Drawing.Point(180, 150)
+    $btnOk.Size = New-Object System.Drawing.Size(120, 36)
+    $btnOk.DialogResult = 'None'
+    $btnOk.Add_Click({
+        $script:GuiKeyResult = @{ Ok = $true; Key = $script:GuiKeyBox.Text }
+        $form.Close()
+    })
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = '取消'
+    $btnCancel.Location = New-Object System.Drawing.Point(320, 150)
+    $btnCancel.Size = New-Object System.Drawing.Size(120, 36)
+    $btnCancel.Add_Click({
+        $script:GuiKeyResult = @{ Ok = $false; Key = '' }
+        $form.Close()
+    })
+
+    $form.Controls.Add($lbl)
+    $form.Controls.Add($txt)
+    $form.Controls.Add($btnOk)
+    $form.Controls.Add($btnCancel)
+    $form.AcceptButton = $btnOk
+    $form.CancelButton = $btnCancel
+
+    $null = $form.ShowDialog()
+    if ($null -eq $script:GuiKeyResult) { $script:GuiKeyResult = @{ Ok = $false; Key = '' } }
+    $form.Dispose()
+    return $script:GuiKeyResult
+}
+
+
+
+
+
+function Invoke-DeepSeekKeySetup {
+    param([string]$CodexHome,[string]$ConfigPath,[string]$ModelsPath,$Cfg,[switch]$UseEnvironmentKey)
+    Assert-CodexConfigPaths -CodexHome $CodexHome -ConfigPath $ConfigPath -ModelsPath $ModelsPath
+    for($attempt=0;$attempt -lt 3;$attempt++) {
+        $res=Show-DeepSeekKeyGuiDialog
+        if(-not $res.Ok){throw 'KEY_INPUT_CANCELLED'}
+        $key=([string]$res.Key).Trim();$res=$null;$script:GuiKeyResult=$null
+        if($key.Length -lt 12){[Windows.Forms.MessageBox]::Show('Key 不完整，请重新输入。','特好装')|Out-Null;continue}
+        $result=Test-DeepSeekApiWithKey -ApiKey $key
+        if($result -ne 'ok'){
+            $key=$null
+            $retry=[Windows.Forms.MessageBox]::Show('当前 Key 或网络未能通过验证。是否重新输入？','特好装',[Windows.Forms.MessageBoxButtons]::RetryCancel)
+            if($retry -eq [Windows.Forms.DialogResult]::Retry){continue}
+            throw 'KEY_VALIDATION_FAILED'
+        }
+        $script:DeepSeekBackupDir=Backup-Config -CodexHome $CodexHome -ConfigPath $ConfigPath -ModelsPath $ModelsPath
+        $oldEnv=$null;$hadOldEnv=$false
+        try {
+            if($UseEnvironmentKey){$oldEnv=[Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY',[EnvironmentVariableTarget]::User);$hadOldEnv=$null-ne $oldEnv;[Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY',$key,[EnvironmentVariableTarget]::User)}
+            Write-DeepSeekConfig -ConfigPath $ConfigPath -ModelsPath $ModelsPath -Model $Cfg.model -ProviderId $Cfg.provider_id -ProviderBase $Cfg.provider_base_url -ApiKey $key -ModelsJson $Cfg.models_json -UseEnvironmentKey:$UseEnvironmentKey
+            if(-not(Test-ConfigWritten -ConfigPath $ConfigPath -ProviderId $Cfg.provider_id)){throw 'CONFIG_INVALID'}
+        } catch {
+            if($script:DeepSeekBackupDir){Restore-Backup -BackupDir $script:DeepSeekBackupDir -ConfigPath $ConfigPath -ModelsPath $ModelsPath}
+            if($UseEnvironmentKey){[Environment]::SetEnvironmentVariable('DEEPSEEK_API_KEY',$(if($hadOldEnv){$oldEnv}else{$null}),[EnvironmentVariableTarget]::User)}
+            throw
+        } finally {$key=$null}
+        return
+    }
+    throw 'KEY_ATTEMPTS_EXHAUSTED'
+}
+
+function Test-ConfigWritten {
+    param([string]$ConfigPath, [string]$ProviderId)
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return $false }
+    $raw = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8
+    return ($raw -match "(?m)^\[model_providers\.$ProviderId\]")
+}
+
+# =====================================================================
+# ChatGPT 模式（Route C）：官方 Desktop App 流程
+# =====================================================================
+# Route C 不再安装 Codex CLI、不执行 CLI 登录、不检查 CLI 登录态、
+# 不修改 config.toml。登录完全由用户在 OpenAI 官方 Desktop App / 官网
+# 流程中自行完成，本安装器不采集任何凭据。
+
+# =====================================================================
+# [5/7] / [6/7] 验证 Codex CLI
+# =====================================================================
+function Invoke-CodexProbe {
+    param([string]$Command, [int]$TimeoutSec = 25)
+    if (-not (Test-Path -LiteralPath $Command -PathType Leaf) -or [IO.Path]::GetExtension($Command) -ne '.exe') { throw 'VERIFY_EXECUTABLE_MISSING' }
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $Command
+    $info.Arguments = '--version'
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $proc = New-Object Diagnostics.Process
+    $proc.StartInfo = $info
+    try {
+        if (-not $proc.Start()) { throw 'VERIFY_START_FAILED' }
+        $stdout = $proc.StandardOutput.ReadToEndAsync()
+        $stderr = $proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit($TimeoutSec * 1000)) { $proc.Kill(); throw 'VERIFY_TIMEOUT' }
+        $proc.WaitForExit()
+        Write-SafeDiagnostic 'PROCESS_EXIT' 'NONE' ([string]$proc.ExitCode)
+        if ($proc.ExitCode -ne 0) { throw 'VERIFY_EXIT_CODE' }
+        $output = $stdout.Result + "`n" + $stderr.Result
+        if ($output -notmatch '(?im)^(?:codex-cli|Codex CLI)\s+v?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)\s*$') { throw 'VERIFY_INVALID_VERSION' }
+        return $Matches[1]
+    } finally { $proc.Dispose() }
+}
+
+function Test-CodexCli {
+    $cmd = Get-CodexCommand
+    if (-not $cmd) { throw '找不到 codex 命令。' }
+    $ver = Invoke-CodexProbe -Command $cmd
+    Write-Ok "Codex CLI 可正常执行（$ver）"
+    return $ver
+}
+
+# =====================================================================
+# Desktop 检测（不构成硬失败条件）
+# =====================================================================

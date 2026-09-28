@@ -1,0 +1,85 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: PowerShell 5.1 syntax check
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'exe-src/Runner.ps1',
+            'exe-src/InstallerLibrary.ps1',
+            'exe-src/build.ps1',
+            'tools/stamp-ticket.ps1'
+          )
+          $failed = $false
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.PSParser]::Tokenize(
+              (Get-Content -LiteralPath $file -Raw),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              foreach ($parseError in $errors) {
+                Write-Error "$file`: $($parseError.Message)"
+              }
+            }
+          }
+          if ($failed) {
+            throw 'PowerShell 5.1 syntax validation failed.'
+          }
+
+      - name: PSScriptAnalyzer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+          }
+          Import-Module PSScriptAnalyzer
+          $results = Invoke-ScriptAnalyzer -Path exe-src,tools -Recurse -Severity Error
+          if ($results) {
+            $results | Format-Table -AutoSize | Out-String | Write-Host
+            throw "PSScriptAnalyzer reported $($results.Count) Error-severity finding(s)."
+          }
+
+      - name: Compile
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\exe-src\build.ps1 -BaseUrl 'http://64.83.26.242:18081' -TestHook -OutDir (Join-Path $PWD 'dist')
+
+      - name: Ticket stamping smoke test
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $PWD 'dist\THZ-Codex-Setup.exe'
+          $copy = Join-Path $env:TEMP 'THZ-Codex-Setup-stamp-smoke.exe'
+          Copy-Item -LiteralPath $source -Destination $copy -Force
+          $ticket = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB'
+          & .\tools\stamp-ticket.ps1 -ExePath $copy -Ticket $ticket
+          if ($LASTEXITCODE -ne 0) {
+            throw "stamp-ticket.ps1 exited with code $LASTEXITCODE."
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          if-no-files-found: error
+          path: |
+            dist/THZ-Codex-Setup.exe
+            dist/SHA256SUMS.txt
