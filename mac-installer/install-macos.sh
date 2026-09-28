@@ -399,7 +399,7 @@ classify_existing_codex() {
             return
         fi
         EXISTING_CODEX="conflict"
-        EXISTING_REASON="~/.local/bin/codex 存在但无法正常执行"
+        EXISTING_REASON="$HOME/.local/bin/codex 存在但无法正常执行"
         return
     fi
 
