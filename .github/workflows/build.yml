@@ -50,7 +50,10 @@ jobs:
             Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
           }
           Import-Module PSScriptAnalyzer
-          $results = Invoke-ScriptAnalyzer -Path exe-src,tools -Recurse -Severity Error
+          $results = @()
+          foreach ($dir in @('exe-src', 'tools')) {
+            $results += Invoke-ScriptAnalyzer -Path $dir -Recurse -Severity Error
+          }
           if ($results) {
             $results | Format-Table -AutoSize | Out-String | Write-Host
             throw "PSScriptAnalyzer reported $($results.Count) Error-severity finding(s)."
