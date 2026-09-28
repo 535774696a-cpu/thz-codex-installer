@@ -72,8 +72,8 @@ jobs:
           Copy-Item -LiteralPath $source -Destination $copy -Force
           $ticket = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB'
           & .\tools\stamp-ticket.ps1 -ExePath $copy -Ticket $ticket
-          if ($LASTEXITCODE -ne 0) {
-            throw "stamp-ticket.ps1 exited with code $LASTEXITCODE."
+          if (-not $?) {
+            throw 'stamp-ticket.ps1 failed.'
           }
 
       - name: Upload build artifacts

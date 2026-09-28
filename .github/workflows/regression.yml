@@ -81,8 +81,8 @@ jobs:
           & .\tools\stamp-ticket.ps1 `
             -ExePath .\dist\THZ-Codex-Setup.exe `
             -Ticket $env:THZ_INSTALL_TOKEN
-          if ($LASTEXITCODE -ne 0) {
-            throw "stamp-ticket.ps1 exited with code $LASTEXITCODE."
+          if (-not $?) {
+            throw 'stamp-ticket.ps1 failed.'
           }
 
       - name: Run installer and assert
