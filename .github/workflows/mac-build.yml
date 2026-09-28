@@ -50,7 +50,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
-      STAGING_INSTALL_TOKEN: ${{ secrets.STAGING_INSTALL_TOKEN }}
 
     steps:
       - name: Checkout
@@ -61,7 +60,6 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${STAGING_API_BASE_URL:-}"
-          test -n "${STAGING_INSTALL_TOKEN:-}"
 
       # 测试 A：安装 token 未注入时，安装器应在本地配置校验阶段安全退出。
       - name: Test missing install token
@@ -138,7 +136,7 @@ jobs:
           fi
 
       # 测试 C：真 token 配合假 DeepSeek Key，验证后续失败和 /fail 上报链路。
-      # staging 若未放行 macos 的 os_type，也允许在 step 1 提前失败。
+      # 每次运行经匿名通道独立 mint 一个 token，避免并行 matrix job 复用冲突。
       - name: Test failure reporting path
         shell: bash
         run: |
@@ -148,7 +146,15 @@ jobs:
           mkdir -p "$work_dir"
           cp mac-installer/install-macos.sh "$work_dir/install-macos.sh"
 
-          perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g; s#__INSTALL_TOKEN__#\Q$ENV{STAGING_INSTALL_TOKEN}\E#g' \
+          token="$(curl -s -m 30 -X POST "${STAGING_API_BASE_URL}/api/installer/select-route" \
+            -H 'Content-Type: application/json' \
+            -d '{"platform":"macos","network":"openai_ok","mode":"deepseek"}' |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["install_token"])')"
+          test -n "$token"
+
+          perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g' \
+            "$work_dir/install-macos.sh"
+          THZ_TOKEN="$token" perl -0pi -e 's#__INSTALL_TOKEN__#\Q$ENV{THZ_TOKEN}\E#g' \
             "$work_dir/install-macos.sh"
 
           marker="$work_dir/log-marker"
