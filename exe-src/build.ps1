@@ -99,14 +99,23 @@ try {
         throw "csc.exe not found: $csc"
     }
 
+    $fxDir = [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+    $formsRef = Join-Path $fxDir 'System.Windows.Forms.dll'
+    $drawingRef = Join-Path $fxDir 'System.Drawing.dll'
+    foreach ($ref in @($formsRef, $drawingRef)) {
+        if (-not (Test-Path -LiteralPath $ref -PathType Leaf)) {
+            throw "Reference assembly not found: $ref"
+        }
+    }
+
     Write-Host "Compiling THZ-Codex-Setup.exe"
     Push-Location $stage
     try {
         $compilerOutput = & $csc `
             '-target:winexe' `
             '-platform:anycpu' `
-            '-r:System.Windows.Forms' `
-            '-r:System.Drawing' `
+            "-r:$formsRef" `
+            "-r:$drawingRef" `
             '-out:THZ-Codex-Setup.exe' `
             'Safety.cs' `
             'Bootstrap.cs' `
