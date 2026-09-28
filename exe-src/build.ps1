@@ -25,6 +25,7 @@ try {
     $escapedBaseUrl = $BaseUrl.Replace("'", "''")
     $baseUrlAssignment = '$BASE_URL=''' + $escapedBaseUrl + ''''
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $utf8Bom = New-Object System.Text.UTF8Encoding($true)  # .ps1 MUST keep BOM: Win PS 5.1 misdecodes BOM-less UTF-8 with non-ASCII as ANSI
 
     foreach ($name in @('Runner.ps1', 'InstallerLibrary.ps1')) {
         $path = Join-Path $stage $name
@@ -38,7 +39,7 @@ try {
         $evaluator = [System.Text.RegularExpressions.MatchEvaluator]{ param($match) return $baseUrlAssignment }
         $re = [regex]$baseUrlPattern
         $text = $re.Replace($text, $evaluator, 1, 0)
-        [System.IO.File]::WriteAllText($path, $text, $utf8NoBom)
+        [System.IO.File]::WriteAllText($path, $text, $utf8Bom)
     }
 
     if ($TestHook) {
@@ -79,7 +80,7 @@ try {
         $hookList.Insert($gi - 1, '    $hookKey=[Environment]::GetEnvironmentVariable(''THZ_DEEPSEEK_KEY'')')
 
         $hookedText = [string]::Join($hookEol, $hookList.ToArray())
-        [System.IO.File]::WriteAllText($hookPath, $hookedText, $utf8NoBom)
+        [System.IO.File]::WriteAllText($hookPath, $hookedText, $utf8Bom)
         Write-Host "TestHook applied: 4 edits"
     }
 
