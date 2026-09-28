@@ -9,6 +9,12 @@ on:
     paths:
       - "mac-installer/**"
       - ".github/workflows/mac-build.yml"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "回归次数（每组测试重复跑多少次，默认 20）"
+        required: false
+        default: "20"
 
 permissions:
   contents: read
@@ -50,6 +56,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+      ITERATIONS: ${{ inputs.iterations || '1' }}
 
     steps:
       - name: Checkout
@@ -67,39 +74,43 @@ jobs:
         run: |
           set -euo pipefail
 
-          work_dir="${RUNNER_TEMP}/thz-test-no-token"
-          mkdir -p "$work_dir"
-          cp mac-installer/install-macos.sh "$work_dir/install-macos.sh"
+          for iter in $(seq 1 "$ITERATIONS"); do
+            echo "=== Test A iteration $iter/$ITERATIONS ==="
+            work_dir="${RUNNER_TEMP}/thz-test-no-token-$iter"
+            mkdir -p "$work_dir"
+            cp mac-installer/install-macos.sh "$work_dir/install-macos.sh"
 
-          # 注意：URL 含 /，用 # 作分隔符并用 \Q..\E 转义。
-          perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g' \
-            "$work_dir/install-macos.sh"
+            # 注意：URL 含 /，用 # 作分隔符并用 \Q..\E 转义。
+            perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g' \
+              "$work_dir/install-macos.sh"
 
-          marker="$work_dir/log-marker"
-          output_file="$work_dir/output.log"
-          touch "$marker"
+            marker="$work_dir/log-marker"
+            output_file="$work_dir/output.log"
+            touch "$marker"
 
-          set +e
-          /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
-          status=$?
-          set -e
+            set +e
+            /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
+            status=$?
+            set -e
 
-          if [ "$status" -eq 0 ]; then
-            echo "无 token 测试未按预期失败。"
-            exit 1
-          fi
+            if [ "$status" -eq 0 ]; then
+              echo "无 token 测试未按预期失败（第 $iter 次）。"
+              exit 1
+            fi
 
-          if ! grep -Eq '安装包配置不完整|缺少安装授权' "$output_file"; then
-            echo "无 token 测试未输出预期提示。"
-            exit 1
-          fi
+            if ! grep -Eq '安装包配置不完整|缺少安装授权' "$output_file"; then
+              echo "无 token 测试未输出预期提示（第 $iter 次）。"
+              exit 1
+            fi
 
-          log_dir="${HOME}/Library/Logs"
-          if [ ! -d "$log_dir" ] || ! find "$log_dir" -type f \
-            -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit | grep -q .; then
-            echo "无 token 测试失败后未生成安装日志。"
-            exit 1
-          fi
+            log_dir="${HOME}/Library/Logs"
+            if [ ! -d "$log_dir" ] || ! find "$log_dir" -type f \
+              -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit | grep -q .; then
+              echo "无 token 测试失败后未生成安装日志（第 $iter 次）。"
+              exit 1
+            fi
+          done
+          echo "Test A passed $ITERATIONS iteration(s)."
 
       # 测试 B：使用明确无效的 token 请求 /start，验证鉴权失败会返回非零状态。
       - name: Test invalid install token
@@ -107,77 +118,85 @@ jobs:
         run: |
           set -euo pipefail
 
-          work_dir="${RUNNER_TEMP}/thz-test-invalid-token"
-          mkdir -p "$work_dir"
-          cp mac-installer/install-macos.sh "$work_dir/install-macos.sh"
+          for iter in $(seq 1 "$ITERATIONS"); do
+            echo "=== Test B iteration $iter/$ITERATIONS ==="
+            work_dir="${RUNNER_TEMP}/thz-test-invalid-token-$iter"
+            mkdir -p "$work_dir"
+            cp mac-installer/install-macos.sh "$work_dir/install-macos.sh"
 
-          perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g; s#__INSTALL_TOKEN__#invalid-token-for-ci-test#g' \
-            "$work_dir/install-macos.sh"
+            perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g; s#__INSTALL_TOKEN__#invalid-token-for-ci-test#g' \
+              "$work_dir/install-macos.sh"
 
-          marker="$work_dir/log-marker"
-          output_file="$work_dir/output.log"
-          touch "$marker"
+            marker="$work_dir/log-marker"
+            output_file="$work_dir/output.log"
+            touch "$marker"
 
-          set +e
-          /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
-          status=$?
-          set -e
+            set +e
+            /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
+            status=$?
+            set -e
 
-          if [ "$status" -eq 0 ]; then
-            echo "假 token 测试未按预期失败。"
-            exit 1
-          fi
+            if [ "$status" -eq 0 ]; then
+              echo "假 token 测试未按预期失败（第 $iter 次）。"
+              exit 1
+            fi
 
-          log_dir="${HOME}/Library/Logs"
-          if [ ! -d "$log_dir" ] || ! find "$log_dir" -type f \
-            -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit | grep -q .; then
-            echo "假 token 测试失败后未生成安装日志。"
-            exit 1
-          fi
+            log_dir="${HOME}/Library/Logs"
+            if [ ! -d "$log_dir" ] || ! find "$log_dir" -type f \
+              -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit | grep -q .; then
+              echo "假 token 测试失败后未生成安装日志（第 $iter 次）。"
+              exit 1
+            fi
+          done
+          echo "Test B passed $ITERATIONS iteration(s)."
 
       # 测试 C：真 token 配合假 DeepSeek Key，验证后续失败和 /fail 上报链路。
-      # 每次运行经匿名通道独立 mint 一个 token，避免并行 matrix job 复用冲突。
+      # 每次迭代经匿名通道独立 mint 一个 token，避免并行 matrix job / 迭代复用冲突。
       - name: Test failure reporting path
         shell: bash
         run: |
           set -euo pipefail
 
-          work_dir="${RUNNER_TEMP}/thz-test-failure-report"
-          mkdir -p "$work_dir"
-          cp mac-installer/install-macos.sh "$work_dir/install-macos.sh"
+          for iter in $(seq 1 "$ITERATIONS"); do
+            echo "=== Test C iteration $iter/$ITERATIONS ==="
+            work_dir="${RUNNER_TEMP}/thz-test-failure-report-$iter"
+            mkdir -p "$work_dir"
+            cp mac-installer/install-macos.sh "$work_dir/install-macos.sh"
 
-          token="$(curl -s -m 30 -X POST "${STAGING_API_BASE_URL}/api/installer/select-route" \
-            -H 'Content-Type: application/json' \
-            -d '{"platform":"macos","network":"openai_ok","mode":"deepseek"}' |
-            python3 -c 'import json,sys; print(json.load(sys.stdin)["install_token"])')"
-          test -n "$token"
+            token="$(curl -s -m 30 -X POST "${STAGING_API_BASE_URL}/api/installer/select-route" \
+              -H 'Content-Type: application/json' \
+              -d '{"platform":"macos","network":"openai_ok","mode":"deepseek"}' |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)["install_token"])')"
+            test -n "$token"
 
-          perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g' \
-            "$work_dir/install-macos.sh"
-          THZ_TOKEN="$token" perl -0pi -e 's#__INSTALL_TOKEN__#\Q$ENV{THZ_TOKEN}\E#g' \
-            "$work_dir/install-macos.sh"
+            perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g' \
+              "$work_dir/install-macos.sh"
+            THZ_TOKEN="$token" perl -0pi -e 's#__INSTALL_TOKEN__#\Q$ENV{THZ_TOKEN}\E#g' \
+              "$work_dir/install-macos.sh"
 
-          marker="$work_dir/log-marker"
-          output_file="$work_dir/output.log"
-          touch "$marker"
+            marker="$work_dir/log-marker"
+            output_file="$work_dir/output.log"
+            touch "$marker"
 
-          set +e
-          printf '%s\n' 'sk-fake-ci-key-0000' |
-            /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
-          status=$?
-          set -e
+            set +e
+            printf '%s\n' 'sk-fake-ci-key-0000' |
+              /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
+            status=$?
+            set -e
 
-          if [ "$status" -eq 0 ]; then
-            echo "假 DeepSeek Key 测试未按预期失败。"
-            exit 1
-          fi
+            if [ "$status" -eq 0 ]; then
+              echo "假 DeepSeek Key 测试未按预期失败（第 $iter 次）。"
+              exit 1
+            fi
 
-          log_dir="${HOME}/Library/Logs"
-          if [ ! -d "$log_dir" ] || ! find "$log_dir" -type f \
-            -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit | grep -q .; then
-            echo "失败上报测试未生成安装日志。"
-            exit 1
-          fi
+            log_dir="${HOME}/Library/Logs"
+            if [ ! -d "$log_dir" ] || ! find "$log_dir" -type f \
+              -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit | grep -q .; then
+              echo "失败上报测试未生成安装日志（第 $iter 次）。"
+              exit 1
+            fi
+          done
+          echo "Test C passed $ITERATIONS iteration(s)."
 
       # 把本次运行产生的安装日志集中到 runner 临时目录，失败时上传。
       # （upload-artifact 的 path 对 ~ 展开不可靠，改用 runner.temp 下的绝对路径。）
