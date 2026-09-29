@@ -272,17 +272,16 @@ jobs:
             sk-*) echo "KEYCHK format: starts with sk- (ok)" ;;
             *) echo "KEYCHK FAIL: Key 格式异常（非 sk- 开头），请检查 Secret 是否为有效的 DeepSeek API Key。"; exit 1 ;;
           esac
-          # Key 传递：用 --key-file（写临时文件传路径）
-          # 背景：stdin 管道不可靠（5 次修复失败）；--key 参数会被 GitHub Actions 剥离（含 Secret 的参数）。
-          # 文件路径不含 Secret，不会被剥离。installer 读取后会安全删除文件。
-          key_file="$work_dir/.thz-key-$$"
-          printf '%s' "$CLEAN_KEY" > "$key_file"
-          chmod 600 "$key_file"
+          # Key 传递：写入约定文件位置（installer 自动检测，无需参数）
+          # 背景：stdin 管道不可靠（5 次失败）；--key/--key-file 参数被 GitHub Actions 剥离。
+          # 改用固定路径：${RUNNER_TEMP}/thz-ci-deepseek-key，installer 的 read_deepseek_key_once() 会自动检测。
+          printf '%s' "$CLEAN_KEY" > "${RUNNER_TEMP}/thz-ci-deepseek-key"
+          chmod 600 "${RUNNER_TEMP}/thz-ci-deepseek-key"
           # 立即清除内存中的 Key（后续泄露检查用 STAGING_DEEPSEEK_KEY）
           CLEAN_KEY="__CLEARED__"
-          /bin/bash "$work_dir/install-macos.sh" --key-file "$key_file" >"$output_file" 2>&1
+          /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
           # 兜底删除（installer 正常情况下已删除）
-          rm -f "$key_file" 2>/dev/null || true
+          rm -f "${RUNNER_TEMP}/thz-ci-deepseek-key" 2>/dev/null || true
 
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"

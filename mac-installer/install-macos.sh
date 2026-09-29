@@ -860,14 +860,21 @@ read_deepseek_key_ci_stdin() {
 }
 
 read_deepseek_key_once() {
-    # 优先级 1：--key-file 从文件读 Key（最可靠，文件路径不含 Secret 不会被 GH 剥离）
+    # 优先级 1：--key-file 从文件读 Key（文件路径不含 Secret 不会被 GH 剥离）
     if [ -n "${CLI_KEY_FILE:-}" ] && [ -f "$CLI_KEY_FILE" ]; then
         entered_key="$(cat "$CLI_KEY_FILE" 2>/dev/null || true)"
         # 安全删除：立即销毁密钥文件
         shred -u "$CLI_KEY_FILE" 2>/dev/null || rm -P "$CLI_KEY_FILE" 2>/dev/null || rm -f "$CLI_KEY_FILE" 2>/dev/null || true
         CLI_KEY_FILE=""
         write_warn "CI 模式：从密钥文件读取到 API Key（文件已安全删除）。"
-    # 优先级 2：命令行 --key 参数（注意 GH 会剥离含 Secret 的参数，不可靠，仅作备用）
+    # 优先级 2：约定文件位置（CI workflow 将 Key 写入固定路径，无需参数传递）
+    # 背景：GitHub Actions 会剥离含 Secret 的命令行参数，stdin 管道也不可靠，
+    # 改用固定路径文件，installer 自动检测。
+    elif [ -f "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" ]; then
+        entered_key="$(cat "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" 2>/dev/null || true)"
+        shred -u "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" 2>/dev/null || rm -P "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" 2>/dev/null || rm -f "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" 2>/dev/null || true
+        write_warn "CI 模式：从约定文件位置读取到 API Key（文件已安全删除）。"
+    # 优先级 3：命令行 --key 参数（注意 GH 会剥离含 Secret 的参数，不可靠，仅作备用）
     elif [ -n "${CLI_KEY:-}" ]; then
         entered_key="$CLI_KEY"
         CLI_KEY=""
