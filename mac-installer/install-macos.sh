@@ -719,7 +719,9 @@ read_deepseek_key_terminal() {
 }
 
 read_deepseek_key_ci_stdin() {
-    IFS= read -r ci_key || return 1
+    # read 在遇到 EOF 无换行时会返回非零，但 ci_key 已有内容；此时不应丢弃。
+    IFS= read -r ci_key || [ -n "$ci_key" ] || return 1
+    [ -n "$ci_key" ] || return 1
     printf '%s' "$ci_key"
 }
 
