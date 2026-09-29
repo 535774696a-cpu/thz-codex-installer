@@ -256,8 +256,15 @@ jobs:
 
           set +e
           CLEAN_KEY="$(printf '%s' "$STAGING_DEEPSEEK_KEY" | tr -d '\n\r')"
+          # DEBUG: 测试 stdin 管道是否正常
+          echo "DEBUG: CLEAN_KEY len=${#CLEAN_KEY}"
+          _test_read="$(printf '%s\n' "$CLEAN_KEY" | head -c 100)"
+          echo "DEBUG: pipe test len=${#_test_read}"
           printf '%s\n' "$CLEAN_KEY" |
             /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
+          echo "DEBUG: installer exit=$?"
+          echo "DEBUG: output file head:"
+          head -30 "$output_file" || true
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"
           echo "DEBUG installer_status len: ${#installer_status}"
