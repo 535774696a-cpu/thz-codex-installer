@@ -24,6 +24,7 @@ START_RESPONSE=""
 DEVICE_FINGERPRINT=""
 CI_KEY_STDIN=0
 CLI_KEY=""
+CLI_KEY_FILE=""
 MODE=""
 MODEL="deepseek-chat"
 PROVIDER_ID="deepseek"
@@ -859,15 +860,19 @@ read_deepseek_key_ci_stdin() {
 }
 
 read_deepseek_key_once() {
-    # 优先级 1：命令行 --key 参数（最可靠，彻底绕过 stdin/环境变量）
-    # 背景：GitHub Actions 的 stdin 管道在安装器多步骤流程中不可靠（5 次修复均失败），
-    # 改用命令行参数传递，CI 日志会自动打码 Secret。
-    if [ -n "${CLI_KEY:-}" ]; then
+    # 优先级 1：--key-file 从文件读 Key（最可靠，文件路径不含 Secret 不会被 GH 剥离）
+    if [ -n "${CLI_KEY_FILE:-}" ] && [ -f "$CLI_KEY_FILE" ]; then
+        entered_key="$(cat "$CLI_KEY_FILE" 2>/dev/null || true)"
+        # 安全删除：立即销毁密钥文件
+        shred -u "$CLI_KEY_FILE" 2>/dev/null || rm -P "$CLI_KEY_FILE" 2>/dev/null || rm -f "$CLI_KEY_FILE" 2>/dev/null || true
+        CLI_KEY_FILE=""
+        write_warn "CI 模式：从密钥文件读取到 API Key（文件已安全删除）。"
+    # 优先级 2：命令行 --key 参数（注意 GH 会剥离含 Secret 的参数，不可靠，仅作备用）
+    elif [ -n "${CLI_KEY:-}" ]; then
         entered_key="$CLI_KEY"
-        # 立即清除命令行参数中的 Key，减少 ps 可见窗口
         CLI_KEY=""
         write_warn "CI 模式：从命令行参数读取到 API Key。"
-    # 优先级 2：CI 自动检测：如果 stdin 不是 tty（被管道重定向），直接从 stdin 读 Key
+    # 优先级 3：CI 自动检测：如果 stdin 不是 tty（被管道重定向），直接从 stdin 读 Key
     elif [ ! -t 0 ]; then
         entered_key="$(read_deepseek_key_ci_stdin)" || {
             write_warn "CI 模式：未能从 stdin 读取到 API Key。"
@@ -1154,7 +1159,8 @@ printf '%s\n' '  Codex AI 一键安装器（macOS）'
 printf '%s\n' '========================================'
 
 # CI 专用：--ci-key-stdin 时从 stdin 读 Key（无 GUI、无 tty 的 runner 用）
-# --key "xxx"：直接通过命令行参数传 Key（彻底绕过 stdin，可靠性最高）
+# --key "xxx"：直接通过命令行参数传 Key（注意：GitHub Actions 会剥离含 Secret 的参数，此方式不可靠）
+# --key-file /path：从文件读 Key（推荐，文件路径不含 Secret，不会被剥离；读取后安全删除）
 _prev_arg=""
 for script_arg in "$@"; do
     case "$script_arg" in
@@ -1162,16 +1168,22 @@ for script_arg in "$@"; do
         --key)
             _prev_arg="--key"
             ;;
+        --key-file)
+            _prev_arg="--key-file"
+            ;;
         *)
             if [ "$_prev_arg" = "--key" ]; then
                 CLI_KEY="$script_arg"
+                _prev_arg=""
+            elif [ "$_prev_arg" = "--key-file" ]; then
+                CLI_KEY_FILE="$script_arg"
                 _prev_arg=""
             fi
             ;;
     esac
 done
 unset _prev_arg
-write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#, key_arg=$([ -n "$CLI_KEY" ] && echo "provided(len=${#CLI_KEY})" || echo "empty")"
+write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#, key_arg=$([ -n "$CLI_KEY" ] && echo "provided(len=${#CLI_KEY})" || echo "empty"), key_file=$([ -n "$CLI_KEY_FILE" ] && echo "provided" || echo "empty")"
 write_warn "STARTUP: ps_args=$(ps -p $$ -o args= 2>/dev/null | head -c 200 || echo 'ps-failed')"
 
 if printf '%s' "$BASE_URL" | grep -q 'BASE_URL'; then
