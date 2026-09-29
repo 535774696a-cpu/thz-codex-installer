@@ -198,6 +198,70 @@ jobs:
           done
           echo "Test C passed $ITERATIONS iteration(s)."
 
+      # 测试 D：真 DeepSeek Key 成功路径（Route D），验证完整 7 步安装。
+      # 每个 matrix OS 跑 1 次；Key 经 stdin 注入，不得落盘明文、不得进日志。
+      - name: Test real DeepSeek key success path
+        shell: bash
+        env:
+          STAGING_DEEPSEEK_KEY: ${{ secrets.STAGING_DEEPSEEK_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${STAGING_DEEPSEEK_KEY:-}" ]; then
+            echo "缺少 STAGING_DEEPSEEK_KEY，fail-fast。"
+            exit 1
+          fi
+
+          echo "=== Test D: real DeepSeek key success path ==="
+          work_dir="${RUNNER_TEMP}/thz-test-real-key"
+          rm -rf "$work_dir"
+          mkdir -p "$work_dir"
+          cp mac-installer/install-macos.sh "$work_dir/install-macos.sh"
+
+          token="$(curl -sS -m 30 -X POST "${STAGING_API_BASE_URL}/api/installer/select-route" \
+            -H 'Content-Type: application/json' \
+            -d '{"platform":"macos","network":"openai_ok","mode":"deepseek"}' |
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["install_token"])')"
+          test -n "$token"
+
+          perl -0pi -e 's#__BASE_URL__#\Q$ENV{STAGING_API_BASE_URL}\E#g' \
+            "$work_dir/install-macos.sh"
+          THZ_TOKEN="$token" perl -0pi -e 's#__INSTALL_TOKEN__#\Q$ENV{THZ_TOKEN}\E#g' \
+            "$work_dir/install-macos.sh"
+
+          marker="$work_dir/log-marker"
+          output_file="$work_dir/output.log"
+          touch "$marker"
+
+          set +e
+          printf '%s\n' "$STAGING_DEEPSEEK_KEY" |
+            /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
+          status=$?
+          set -e
+
+          if grep -Fq "$STAGING_DEEPSEEK_KEY" "$output_file"; then
+            echo "严重：真 Key 泄露到安装 stdout 日志。"
+            exit 1
+          fi
+          new_log="$(find "${HOME}/Library/Logs" -type f -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit 2>/dev/null || true)"
+          if [ -n "${new_log:-}" ] && grep -Fq "$STAGING_DEEPSEEK_KEY" "$new_log"; then
+            echo "严重：真 Key 泄露到安装日志文件。"
+            exit 1
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "真 Key 成功路径测试失败（exit=$status），末尾日志："
+            tail -n 40 "$output_file"
+            exit 1
+          fi
+          grep -Fq 'Codex AI 安装完成' "$output_file" || { echo "未找到安装完成标记。"; exit 1; }
+
+          config="$HOME/.codex/config.toml"
+          test -f "$config" || { echo "配置文件未生成：$config"; exit 1; }
+          grep -qi 'deepseek' "$config" || { echo "配置文件未指向 DeepSeek。"; exit 1; }
+          grep -Fq "$STAGING_DEEPSEEK_KEY" "$config" || { echo "配置文件未写入 Key（安装不完整）。"; exit 1; }
+
+          echo "Test D passed (real DeepSeek key, full 7-step install)."
+
       # 把本次运行产生的安装日志集中到 runner 临时目录，失败时上传。
       # （upload-artifact 的 path 对 ~ 展开不可靠，改用 runner.temp 下的绝对路径。）
       - name: Collect installer logs
