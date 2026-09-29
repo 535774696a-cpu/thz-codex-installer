@@ -167,6 +167,7 @@ jobs:
               -H 'Content-Type: application/json' \
               -d '{"platform":"macos","network":"openai_ok","mode":"deepseek"}' |
               python3 -c 'import json,sys; print(json.load(sys.stdin)["install_token"])')"
+            token="$(printf '%s' "$token" | tr -d '\r\n')"
             test -n "$token"
 
             perl -0pi -e 's#__BASE_URL__#$ENV{STAGING_API_BASE_URL}#g' \
@@ -222,6 +223,7 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"platform":"macos","network":"openai_ok","mode":"deepseek"}' |
             python3 -c 'import json,sys; print(json.load(sys.stdin)["install_token"])')"
+          token="$(printf '%s' "$token" | tr -d '\r\n')"
           test -n "$token"
 
           perl -0pi -e 's#__BASE_URL__#$ENV{STAGING_API_BASE_URL}#g' \
