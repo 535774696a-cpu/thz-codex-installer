@@ -342,74 +342,157 @@ THZ_INSTALL_PROXY="http://64.83.26.242:18888"
 USE_INSTALL_PROXY=0
 
 # 检测直连是否可用，不可用则启用内置临时代理
+probe_domain_direct() {
+    local domain="$1"
+    local attempt ip dns_ok tcp_ok http_code curl_status
+    local dns_tmp_a dns_tmp_aaaa
+
+    attempt=1
+    while [ "$attempt" -le 2 ]; do
+        ip=""
+        dns_ok=1
+        tcp_ok=1
+
+        # L1: DNS（并行查询 A 和 AAAA）
+        if command -v dig >/dev/null 2>&1; then
+            dns_tmp_a="$(mktemp -t thz_dns_a.XXXXXX 2>/dev/null)" || return 1
+            dns_tmp_aaaa="$(mktemp -t thz_dns_aaaa.XXXXXX 2>/dev/null)" || {
+                rm -f "$dns_tmp_a"
+                return 1
+            }
+
+            dig +time=2 +tries=1 +short A "$domain" >"$dns_tmp_a" 2>/dev/null &
+            local dns_pid_a=$!
+            dig +time=2 +tries=1 +short AAAA "$domain" >"$dns_tmp_aaaa" 2>/dev/null &
+            local dns_pid_aaaa=$!
+            wait "$dns_pid_a" 2>/dev/null
+            wait "$dns_pid_aaaa" 2>/dev/null
+
+            ip="$(awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }' "$dns_tmp_a")"
+            if [ -s "$dns_tmp_a" ] || [ -s "$dns_tmp_aaaa" ]; then
+                dns_ok=0
+            fi
+            rm -f "$dns_tmp_a" "$dns_tmp_aaaa"
+        elif command -v nslookup >/dev/null 2>&1; then
+            if nslookup -timeout=2 -retry=1 -type=A "$domain" 2>/dev/null |
+                grep -Eq '(^Address:|has address|internet address =|^[[:space:]]*Addresses:)'; then
+                dns_ok=0
+            fi
+            if [ "$dns_ok" -ne 0 ] &&
+                nslookup -timeout=2 -retry=1 -type=AAAA "$domain" 2>/dev/null |
+                grep -Eq '(^Address:|has IPv6 address|internet address =|^[[:space:]]*Addresses:)'; then
+                dns_ok=0
+            fi
+        fi
+
+        if [ "$dns_ok" -eq 0 ]; then
+            # L2: TCP 443
+            if command -v nc >/dev/null 2>&1; then
+                nc -z -w 2 "$domain" 443 >/dev/null 2>&1 && tcp_ok=0
+            elif command -v perl >/dev/null 2>&1; then
+                perl -e '
+                    use IO::Socket::INET;
+                    local $SIG{ALRM} = sub { exit 1 };
+                    alarm 2;
+                    my $s = IO::Socket::INET->new(
+                        PeerAddr => $ARGV[0],
+                        PeerPort => 443,
+                        Proto    => "tcp",
+                        Timeout  => 2
+                    );
+                    exit($s ? 0 : 1);
+                ' "$domain" >/dev/null 2>&1 && tcp_ok=0
+            fi
+        fi
+
+        # L3 + L4: TLS 握手及 HTTP 响应
+        if [ "$dns_ok" -eq 0 ] && [ "$tcp_ok" -eq 0 ]; then
+            if [ "$attempt" -eq 1 ]; then
+                http_code="$(curl -sS --connect-timeout 2 --max-time 5 \
+                    -o /dev/null -w '%{http_code}' "https://$domain/" 2>/dev/null)"
+            else
+                http_code="$(curl -4 -sS --connect-timeout 2 --max-time 5 \
+                    -o /dev/null -w '%{http_code}' "https://$domain/" 2>/dev/null)"
+            fi
+            curl_status=$?
+
+            if [ "$curl_status" -eq 0 ]; then
+                case "$http_code" in
+                    2??|3??|401|403|404|405) return 0 ;;
+                esac
+            fi
+        fi
+
+        [ "$attempt" -eq 1 ] && sleep 0.4
+        attempt=$((attempt + 1))
+    done
+
+    return 1
+}
+
 setup_install_proxy() {
-    write_warn "检测网络环境..."
-    # 直连测试 api.openai.com（3秒超时）
-    if curl -s -m 3 -o /dev/null -w '%{http_code}' https://api.openai.com/ 2>/dev/null | grep -qE '^[2345]'; then
-        write_ok "直连可用，不使用代理"
-        USE_INSTALL_PROXY=0
-        return 0
-    fi
-    # 直连失败，尝试内置临时代理
-    write_warn "直连不可用，尝试内置临时下载代理..."
-    if curl -s -m 10 -o /dev/null -w '%{http_code}' -x "$THZ_INSTALL_PROXY" https://api.openai.com/ 2>/dev/null | grep -qE '^[2345]'; then
+    local DOWNLOAD_DOMAINS="api.openai.com github.com api.github.com"
+    local THZ_INSTALL_PROXY="http://64.83.26.242:18888"
+    local need_proxy_domains=""
+    local ok_domains=""
+    local domain route_name proxy_code _confirm
+
+    write_warn "检测下载网络环境..."
+
+    for domain in $DOWNLOAD_DOMAINS; do
+        route_name="$(printf '%s' "$domain" | tr '.' '_')"
+
+        if probe_domain_direct "$domain"; then
+            write_ok "✓ $domain 直连可用"
+            eval "PROXY_ROUTE_${route_name}=direct"
+            ok_domains="$ok_domains $domain"
+        else
+            write_warn "✗ $domain 直连不可用"
+            proxy_code="$(curl -sS --connect-timeout 5 --max-time 10 \
+                -o /dev/null -w '%{http_code}' \
+                -x "$THZ_INSTALL_PROXY" "https://$domain/" 2>/dev/null)"
+
+            if printf '%s\n' "$proxy_code" | grep -qE '^[234]'; then
+                write_ok "→ $domain 将经临时下载通道"
+                eval "PROXY_ROUTE_${route_name}=proxy"
+                need_proxy_domains="$need_proxy_domains $domain"
+            else
+                write_fail "✗ $domain 直连与代理均不可用"
+                eval "PROXY_ROUTE_${route_name}=failed"
+            fi
+        fi
+    done
+
+    if [ -n "$need_proxy_domains" ]; then
+        if [ "$CI_KEY_STDIN" != "1" ]; then
+            printf '\n%s\n' "检测到以下域名不可直接访问：$need_proxy_domains"
+            printf '%s' "将使用临时下载通道（仅本次安装，不修改系统设置），是否继续？(Y/n)："
+            IFS= read -r _confirm </dev/tty || _confirm="y"
+            case "$_confirm" in
+                n|N|no|NO) fail_exit 2 "STEP2_CANCEL" "用户取消安装。" ;;
+            esac
+        fi
+
         export https_proxy="$THZ_INSTALL_PROXY"
         export http_proxy="$THZ_INSTALL_PROXY"
         export HTTPS_PROXY="$THZ_INSTALL_PROXY"
         export HTTP_PROXY="$THZ_INSTALL_PROXY"
         USE_INSTALL_PROXY=1
-        write_ok "已启用内置临时下载代理（仅用于本次安装）"
-        return 0
+        write_ok "已启用临时下载通道（仅本次安装进程有效）"
+    else
+        USE_INSTALL_PROXY=0
+        write_ok "所有下载域名直连可用，不使用代理"
     fi
-    # 代理也不可用
-    write_warn "内置代理也不可用"
-    return 1
+
+    return 0
 }
 
-# 清除安装器代理设置
 clear_install_proxy() {
     if [ "$USE_INSTALL_PROXY" = "1" ]; then
         unset https_proxy http_proxy HTTPS_PROXY HTTP_PROXY
         USE_INSTALL_PROXY=0
         write_ok "已清除临时下载代理设置"
     fi
-}
-
-check_deepseek_network() {
-    # 如果已启用临时代理，跳过直连 DNS/TCP 检查，直接用 curl（走代理）探测
-    if [ "$USE_INSTALL_PROXY" = "1" ]; then
-        write_ok "使用临时下载代理进行网络检查"
-        http_probe="$(curl -sS -I --connect-timeout 8 --max-time 15 \
-            -o /dev/null -w '%{http_code}' https://api.deepseek.com/ 2>/dev/null)"
-        curl_status=$?
-        if [ "$curl_status" -ne 0 ] || [ "$http_probe" = "000" ] || [ -z "$http_probe" ]; then
-            fail_exit 2 "STEP2_HTTP" "通过临时代理无法连接 DeepSeek API。"
-        fi
-        write_ok "DeepSeek API 服务器已响应（HTTP $http_probe，经临时代理）"
-        return 0
-    fi
-    if command -v nslookup >/dev/null 2>&1; then
-        nslookup api.deepseek.com >/dev/null 2>&1 ||
-            fail_exit 2 "STEP2_DNS" "无法解析 api.deepseek.com（DNS 失败）。"
-    elif command -v dig >/dev/null 2>&1; then
-        dig +short api.deepseek.com 2>/dev/null | grep -q . ||
-            fail_exit 2 "STEP2_DNS" "无法解析 api.deepseek.com（DNS 失败）。"
-    else
-        fail_exit 2 "STEP2_DNS_TOOL" "系统缺少 DNS 检测工具 nslookup/dig。"
-    fi
-    write_ok "DNS 解析正常（api.deepseek.com）"
-
-    nc -z -w 5 api.deepseek.com 443 >/dev/null 2>&1 ||
-        fail_exit 2 "STEP2_TCP" "无法连接 api.deepseek.com:443（TCP 连接失败）。"
-    write_ok "HTTPS 端口连通（api.deepseek.com:443）"
-
-    http_probe="$(curl -sS -I --connect-timeout 8 --max-time 15 \
-        -o /dev/null -w '%{http_code}' https://api.deepseek.com/ 2>/dev/null)"
-    curl_status=$?
-    if [ "$curl_status" -ne 0 ] || [ "$http_probe" = "000" ] || [ -z "$http_probe" ]; then
-        fail_exit 2 "STEP2_HTTP" "无法连接 DeepSeek API（连接、TLS 或超时错误）。"
-    fi
-    write_ok "DeepSeek API 服务器已响应（HTTP $http_probe）"
 }
 
 run_with_timeout() {
@@ -1115,7 +1198,7 @@ write_step 2 "检查系统和网络..."
 check_system
 # 先检测是否需要临时代理
 setup_install_proxy || write_warn "网络检测：直连与临时代理均不可用，后续下载可能失败"
-check_deepseek_network
+# check_deepseek_network 已删除：安装器不再检测 DeepSeek 连通性
 
 write_step 3 "安装或复用 Codex CLI..."
 install_codex_cli
