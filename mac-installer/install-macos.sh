@@ -763,20 +763,12 @@ read_deepseek_key_once() {
 validate_deepseek_key() {
     key_response="${TMP_BASE%/}/thz-deepseek-key-${STAMP}-$$.json"
 
-    http_code="$(
-        printf '%s\n' \
-            'silent' \
-            'show-error' \
-            'connect-timeout = 10' \
-            'max-time = 20' \
-            'request = "GET"' \
-            'url = "https://api.deepseek.com/v1/models"' \
-            "header = \"Authorization: Bearer $API_KEY\"" \
-            'header = "Accept: application/json"' \
-            'output = "'"$key_response"'"' \
-            'write-out = "%{http_code}"' |
-            curl -K - 2>/dev/null
-    )"
+    # 使用简单直接的 curl 命令（与诊断验证一致），避免 -K 配置文件解析问题
+    http_code="$(curl -s -m 20 -o "$key_response" -w '%{http_code}' \
+        --connect-timeout 10 \
+        -H "Authorization: Bearer $API_KEY" \
+        -H "Accept: application/json" \
+        "https://api.deepseek.com/v1/models" 2>/dev/null || echo '000')"
     curl_status=$?
 
     if [ "$curl_status" -ne 0 ] || [ "$http_code" = "000" ] || [ -z "$http_code" ]; then
