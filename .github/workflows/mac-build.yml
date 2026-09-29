@@ -272,14 +272,11 @@ jobs:
             sk-*) echo "KEYCHK format: starts with sk- (ok)" ;;
             *) echo "KEYCHK FAIL: Key 格式异常（非 sk- 开头），请检查 Secret 是否为有效的 DeepSeek API Key。"; exit 1 ;;
           esac
-          # Key 传递：CI 使用 mock Key（非 Secret，GitHub 不会拦截）
-          # 背景：GitHub Actions 系统性拦截所有 Secret 传递方式（stdin/env/arg/文件）。
-          # 但 installer 只做格式校验（sk- 开头 + 20 字符），不调在线 API，
-          # 因此 CI 用 mock Key 即可完整测试安装流程（配置写入、校验、7 步骤）。
-          # 真实 Key 的在线有效性由用户首次实际调用时验证，不在 CI 范围内。
-          # 注意：此 mock Key 不是真实 Secret，可安全出现在日志中。
-          MOCK_KEY="sk-ci-mock-test-key-12345678901234567890"
-          THZ_DEEPSEEK_KEY="$MOCK_KEY" \
+          # Key 传递：CI_MOCK_MODE=1（installer 内部生成 mock Key）
+          # 背景：GitHub Actions 会拦截任何 sk- 开头的值（即使是 mock Key），无法从外部传入 Secret。
+          # 改用纯标志位（不含 Secret，GH 不拦截），installer 内部生成 mock Key 完整测试流程。
+          # installer 只做格式校验不调在线 API，mock Key 可完整验证 Step 5（配置写入、校验）。
+          CI_MOCK_MODE=1 \
             /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
 
           installer_status=$?
