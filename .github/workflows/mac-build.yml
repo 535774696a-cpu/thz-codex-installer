@@ -256,7 +256,7 @@ jobs:
 
           set +e
           CLEAN_KEY="$(printf '%s' "$STAGING_DEEPSEEK_KEY" | tr -d '\n\r')"
-          printf '%s\n' "$CLEAN_KEY" |
+          THZ_DEEPSEEK_KEY="$CLEAN_KEY" \
             /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
 
           installer_status=$?
