@@ -255,23 +255,9 @@ jobs:
           echo "--- end diagnostic ---"
 
           set +e
-          # 严格校验 Secret 有效性：在传递前确保它是真实 Key，而非空白/占位符
-          # 背景：曾出现 Secret 非空但全空白，导致 installer trim 后长度为 0 的诡异失败
-          CLEAN_KEY="$(printf '%s' "${STAGING_DEEPSEEK_KEY:-}" | tr -d '\n\r')"
-          # 去除首尾空白后检查（模拟 installer 的 trim_text）
-          TRIMMED_LEN="$(printf '%s' "${CLEAN_KEY:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | wc -c)"
-          CLEAN_LEN="$(printf '%s' "${CLEAN_KEY:-}" | wc -c)"
-          echo "KEYCHK lengths: raw=${CLEAN_LEN} trimmed=${TRIMMED_LEN}"
-          if [ "${TRIMMED_LEN}" -lt 12 ]; then
-            echo "KEYCHK FAIL: STAGING_DEEPSEEK_KEY 无效（全空白或过短，trim 后长度=${TRIMMED_LEN}）。"
-            echo "请检查 GitHub Secrets 中的 STAGING_DEEPSEEK_KEY 是否正确设置（应为 sk- 开头的 DeepSeek API Key）。"
-            exit 1
-          fi
-          # 格式抽查：应以 sk- 开头（不输出具体内容）
-          case "$CLEAN_KEY" in
-            sk-*) echo "KEYCHK format: starts with sk- (ok)" ;;
-            *) echo "KEYCHK FAIL: Key 格式异常（非 sk- 开头），请检查 Secret 是否为有效的 DeepSeek API Key。"; exit 1 ;;
-          esac
+          # 注意：本步骤不引用 STAGING_DEEPSEEK_KEY（GitHub 会因此锁定整个步骤的 env 传递）。
+          # CI 使用 installer 内部 mock Key（CI_MOCK_MODE=1），完整测试安装流程。
+          # Secret 有效性校验已移至独立步骤（不运行 installer）。
           # Key 传递：CI_MOCK_MODE=1（installer 内部生成 mock Key）
           # 背景：GitHub Actions 会拦截任何 sk- 开头的值（即使是 mock Key），无法从外部传入 Secret。
           # 改用纯标志位（不含 Secret，GH 不拦截），installer 内部生成 mock Key 完整测试流程。
@@ -287,11 +273,6 @@ jobs:
           # mock Key 不是 Secret，无需泄露检查
           # 清理残留（installer 正常情况下已删除，异常退出时兜底）
           rm -f "$work_dir/.dsk" 2>/dev/null || true
-          new_log="$(find "${HOME}/Library/Logs" -type f -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit 2>/dev/null || true)"
-          if [ -n "${new_log:-}" ] && grep -Fq "$STAGING_DEEPSEEK_KEY" "$new_log"; then
-            echo "严重：真 Key 泄露到安装日志文件。"
-            exit 1
-          fi
 
           if [ "$installer_status" -ne 0 ]; then
             echo "Mock Key 成功路径测试失败（exit=$installer_status），末尾日志："
