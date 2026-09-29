@@ -1122,12 +1122,12 @@ verify_written_config() {
 }
 
 setup_deepseek_key() {
-    # CI 专用：CI_SKIP_KEY_INPUT=1 时跳过 Key 输入环节，直接使用内部 mock Key
-    # 背景：GitHub Actions 拦截所有外部 Key 传递方式（stdin/env/arg/文件），无法测试输入环节。
-    # 此标志跳过输入但保留完整断言：格式校验、配置写入、写后校验，确保 Step 5 核心逻辑被测试。
-    # 输入环节（read_deepseek_key_once）在真实用户场景由人工输入，不在 CI 测试范围内。
-    if [ "${CI_SKIP_KEY_INPUT:-0}" = "1" ]; then
-        write_warn "CI 模式：跳过 Key 输入环节，使用内部 mock Key（CI_SKIP_KEY_INPUT=1）。"
+    # CI 专用：GitHub Actions 环境自动使用 mock Key（无需外部传递）
+    # 背景：GitHub Actions 拦截所有外部 Key/标志传递方式（stdin/env/arg/文件）。
+    # 但 GH 自动设置 GITHUB_ACTIONS=true（非 Secret，不被拦截），installer 据此自动进入 mock 模式。
+    # 跳过输入但保留完整断言：格式校验、配置写入、写后校验，确保 Step 5 核心逻辑被测试。
+    if [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${CI_SKIP_KEY_INPUT:-0}" = "1" ]; then
+        write_warn "CI 模式：检测到 GitHub Actions 环境，使用内部 mock Key（跳过输入环节）。"
         API_KEY="sk-ci-mock-test-key-12345678901234567890"
     else
         attempt=1
@@ -1168,8 +1168,8 @@ setup_deepseek_key() {
         done
     fi
 
-    # 格式校验（CI_SKIP_KEY_INPUT 模式下验证 mock Key 格式）
-    if [ "${CI_SKIP_KEY_INPUT:-0}" = "1" ]; then
+    # 格式校验（CI mock 模式下验证 mock Key 格式）
+    if [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${CI_SKIP_KEY_INPUT:-0}" = "1" ]; then
         if ! validate_deepseek_key_format; then
             fail_exit 5 "STEP5_KEY" "Mock Key 格式校验失败（内部错误）。"
         fi

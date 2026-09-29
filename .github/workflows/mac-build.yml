@@ -258,13 +258,12 @@ jobs:
           # 注意：本步骤不引用 STAGING_DEEPSEEK_KEY（GitHub 会因此锁定整个步骤的 env 传递）。
           # CI 使用 installer 内部 mock Key（CI_MOCK_MODE=1），完整测试安装流程。
           # Secret 有效性校验已移至独立步骤（不运行 installer）。
-          # Key 传递：CI_SKIP_KEY_INPUT=1（跳过输入环节，installer 内部用 mock Key）
-          # 背景：GitHub Actions 拦截所有外部 Key 传递方式，无法测试输入环节。
-          # CI_SKIP_KEY_INPUT 只跳过输入，保留完整断言：格式校验、配置写入、写后校验。
+          # Key 处理：installer 自动检测 GITHUB_ACTIONS=true，使用内部 mock Key
+          # 背景：GitHub Actions 拦截所有外部 Key/标志传递方式。
+          # GH 自动设置 GITHUB_ACTIONS=true（非 Secret，不被拦截），installer 据此自动进入 mock 模式。
+          # 跳过输入但保留完整断言：格式校验、配置写入、写后校验。
           # 本步骤不引用任何 Secret，GH 不会锁定 env 传递。
-          export CI_SKIP_KEY_INPUT=1
           /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
-          unset CI_SKIP_KEY_INPUT
 
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"
