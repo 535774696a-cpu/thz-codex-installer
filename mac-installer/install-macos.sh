@@ -771,7 +771,7 @@ validate_deepseek_key() {
             'max-time = 20' \
             'request = "GET"' \
             'url = "https://api.deepseek.com/models"' \
-            'header = "Authorization: Bearer '"$API_KEY"'"' \
+            "header = \"Authorization: Bearer $API_KEY\"" \
             'header = "Accept: application/json"' \
             'output = "'"$key_response"'"' \
             'write-out = "%{http_code}"' |
