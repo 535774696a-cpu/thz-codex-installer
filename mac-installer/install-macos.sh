@@ -1143,6 +1143,7 @@ for script_arg in "$@"; do
         --ci-key-stdin) CI_KEY_STDIN=1 ;;
     esac
 done
+write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#"
 
 if printf '%s' "$BASE_URL" | grep -q 'BASE_URL'; then
     fail_exit 1 "STEP1_CONFIG" "安装包配置不完整（缺少服务器地址），请重新下载。"
