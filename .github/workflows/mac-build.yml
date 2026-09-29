@@ -272,13 +272,9 @@ jobs:
             sk-*) echo "KEYCHK format: starts with sk- (ok)" ;;
             *) echo "KEYCHK FAIL: Key 格式异常（非 sk- 开头），请检查 Secret 是否为有效的 DeepSeek API Key。"; exit 1 ;;
           esac
-          # 用 export 显式传递，并验证传递成功
-          export THZ_DEEPSEEK_KEY="$CLEAN_KEY"
-          # 兜底：同时写入密钥文件（0600 权限），installer 读取后立即安全删除
-          # 背景：CI 环境变量传递存在不明问题，文件方式更可靠
-          printf '%s' "$CLEAN_KEY" > "$work_dir/.dsk" && chmod 600 "$work_dir/.dsk"
-          export THZ_KEY_FILE="$work_dir/.dsk"
-          /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
+          # Key 传递：用 stdin 管道（GitHub Actions 会剥离命令行参数和 Secret 环境变量，stdin 是唯一可靠通道）
+          # installer 自动检测 stdin 非 tty 时从管道读 Key，无需 --ci-key-stdin 标志
+          printf '%s\n' "$CLEAN_KEY" | /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
           # 清理残留（installer 正常情况下已删除，异常退出时兜底）
           rm -f "$work_dir/.dsk" 2>/dev/null || true
 

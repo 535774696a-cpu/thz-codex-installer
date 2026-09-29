@@ -858,7 +858,16 @@ read_deepseek_key_ci_stdin() {
 }
 
 read_deepseek_key_once() {
-    if [ "$CI_KEY_STDIN" -eq 1 ]; then
+    # CI 自动检测：如果 stdin 不是 tty（被管道重定向），直接从 stdin 读 Key，无需 --ci-key-stdin 标志
+    # 背景：GitHub Actions 会剥离命令行参数和 Secret 环境变量，stdin 管道是唯一可靠通道
+    #（后台任务的 stdin 已重定向到 /dev/null，不会争抢，见 8f98286 修复）
+    if [ ! -t 0 ]; then
+        entered_key="$(read_deepseek_key_ci_stdin)" || {
+            write_warn "CI 模式：未能从 stdin 读取到 API Key。"
+            return 1
+        }
+        write_warn "CI 模式：从 stdin 管道读取到 API Key。"
+    elif [ "$CI_KEY_STDIN" -eq 1 ]; then
         # 优先从密钥文件读取（CI 环境变量传递不可靠时的兜底，文件读取后立即安全删除）
         if [ -n "${THZ_KEY_FILE:-}" ] && [ -f "$THZ_KEY_FILE" ]; then
             entered_key="$(cat "$THZ_KEY_FILE" 2>/dev/null || true)"
