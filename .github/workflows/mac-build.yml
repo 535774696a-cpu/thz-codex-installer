@@ -205,7 +205,8 @@ jobs:
         env:
           STAGING_DEEPSEEK_KEY: ${{ secrets.STAGING_DEEPSEEK_KEY }}
         run: |
-          set -euo pipefail
+          set -eo pipefail
+          installer_status=0
           if [ -z "${STAGING_DEEPSEEK_KEY:-}" ]; then
             echo "缺少 STAGING_DEEPSEEK_KEY，fail-fast。"
             exit 1
@@ -232,10 +233,20 @@ jobs:
           output_file="$work_dir/output.log"
           touch "$marker"
 
+          echo "--- connectivity diagnostic: POST /api/installer/start ---"
+          diag_code="$(curl -sS --connect-timeout 15 --max-time 30 \
+            -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            --data-binary '{"install_token":"dummy-token-for-connectivity-check-12345678","device_fingerprint":"0000000000000000000000000000000000000000000000000000000000000000","installer_version":"diag","os_type":"macos"}' \
+            "${STAGING_API_BASE_URL}/api/installer/start")" || diag_code="curl-failed-$?"
+          echo "diagnostic /start result: $diag_code (422/401=连通正常, curl-failed=连不上)"
+          echo "--- end diagnostic ---"
+
           set +e
           printf '%s\n' "$STAGING_DEEPSEEK_KEY" |
             /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
-          status=$?
+          installer_status=$?
           set -e
 
           if grep -Fq "$STAGING_DEEPSEEK_KEY" "$output_file"; then
@@ -248,8 +259,8 @@ jobs:
             exit 1
           fi
 
-          if [ "$status" -ne 0 ]; then
-            echo "真 Key 成功路径测试失败（exit=$status），末尾日志："
+          if [ "$installer_status" -ne 0 ]; then
+            echo "真 Key 成功路径测试失败（exit=$installer_status），末尾日志："
             tail -n 40 "$output_file"
             exit 1
           fi
