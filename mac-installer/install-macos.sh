@@ -300,7 +300,7 @@ api_complete() {
         -H 'Content-Type: application/json' \
         -X POST \
         --data-binary "$complete_body" \
-        "$BASE_URL/api/installer/complete" >/dev/null 2>&1 &
+        "$BASE_URL/api/installer/complete" >/dev/null 2>&1 </dev/null &
 }
 
 version_ge_12() {
@@ -498,7 +498,7 @@ run_with_timeout() {
     output_file="$2"
     shift 2
 
-    "$@" >"$output_file" 2>&1 &
+    "$@" >"$output_file" 2>&1 </dev/null &
     child_pid=$!
     elapsed=0
 
