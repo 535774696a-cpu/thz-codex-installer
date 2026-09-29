@@ -863,11 +863,11 @@ read_deepseek_key_ci_stdin() {
 read_deepseek_key_once() {
     # 优先级 0：CI_MOCK_MODE（CI 测试专用，installer 内部生成 mock Key）
     # 背景：GitHub Actions 会拦截任何 sk- 开头的值（即使是 mock），无法从外部传入。
-    # 改用纯标志位 CI_MOCK_MODE=1（不含 Secret，GH 不拦截），installer 内部生成 mock Key。
+    # 改用文件存在性标志（空文件，不含 Secret，GH 不拦截），installer 内部生成 mock Key。
     # 完整测试安装流程（配置写入、校验、7 步骤），不依赖外部 Secret。
-    if [ "${CI_MOCK_MODE:-0}" = "1" ]; then
+    if [ -f "${RUNNER_TEMP:-/tmp}/thz-ci-mock-mode" ] || [ "${CI_MOCK_MODE:-0}" = "1" ]; then
         entered_key="sk-ci-mock-test-key-12345678901234567890"
-        write_warn "CI 模式：使用内部 mock Key（CI_MOCK_MODE=1）。"
+        write_warn "CI 模式：使用内部 mock Key（mock 标志已设置）。"
     # 优先级 1：THZ_DEEPSEEK_KEY 环境变量（GitHub Actions 标准方式，最可靠）
     # 背景：env var 是 GH 传递 Secret 的标准通道，不会被剥离（仅在日志中打码）。
     # 之前此检查被埋在 CI_KEY_STDIN 分支内，而 [ ! -t 0 ] 在 CI 中恒为真导致永远走不到，今移至最优先。
