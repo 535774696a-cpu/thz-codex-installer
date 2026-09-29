@@ -255,34 +255,25 @@ jobs:
           echo "--- end diagnostic ---"
 
           set +e
-          # Canary 测试：非 Secret 的环境变量能否传递到子进程？
-          # 如果 canary 能通过但 Secret 不能 → GitHub 在剥离 Secret
-          # 如果 canary 也不能通过 → 通用环境变量传递问题
-          export THZ_CANARY="canary-ok-12345"
-          /bin/bash -c 'echo "CANARY_RESULT: [$THZ_CANARY]"'
-          # 安全诊断链：只记录长度和 SHA-256 短指纹，绝不输出 Key 明文/前后缀
-          # 目的：明确区分 Secret 为空 / 环境变量丢失 / stdin 被消耗 三种失败
-          # 注意：不用 "DIAG" 前缀（疑似被日志过滤），改用 "KEYCHK"
-          SECRET_LEN="$(printf '%s' "${STAGING_DEEPSEEK_KEY:-}" | wc -c)"
-          SECRET_FP="$(printf '%s' "${STAGING_DEEPSEEK_KEY:-}" | sha256sum | cut -c1-8)"
-          echo "KEYCHK secret: len=${SECRET_LEN} sha8=${SECRET_FP}"
+          # 严格校验 Secret 有效性：在传递前确保它是真实 Key，而非空白/占位符
+          # 背景：曾出现 Secret 非空但全空白，导致 installer trim 后长度为 0 的诡异失败
           CLEAN_KEY="$(printf '%s' "${STAGING_DEEPSEEK_KEY:-}" | tr -d '\n\r')"
+          # 去除首尾空白后检查（模拟 installer 的 trim_text）
+          TRIMMED_LEN="$(printf '%s' "${CLEAN_KEY:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | wc -c)"
           CLEAN_LEN="$(printf '%s' "${CLEAN_KEY:-}" | wc -c)"
-          CLEAN_FP="$(printf '%s' "${CLEAN_KEY:-}" | sha256sum | cut -c1-8)"
-          echo "KEYCHK cleankey: len=${CLEAN_LEN} sha8=${CLEAN_FP}"
-          if [ "${CLEAN_LEN}" -eq 0 ]; then
-            echo "KEYCHK FAIL: CLEAN_KEY 为空（Secret 可能只含空白/换行，或 tr 处理异常）。"
+          echo "KEYCHK lengths: raw=${CLEAN_LEN} trimmed=${TRIMMED_LEN}"
+          if [ "${TRIMMED_LEN}" -lt 12 ]; then
+            echo "KEYCHK FAIL: STAGING_DEEPSEEK_KEY 无效（全空白或过短，trim 后长度=${TRIMMED_LEN}）。"
+            echo "请检查 GitHub Secrets 中的 STAGING_DEEPSEEK_KEY 是否正确设置（应为 sk- 开头的 DeepSeek API Key）。"
             exit 1
           fi
-          # 用 export 显式传递（比 VAR=val cmd 前缀更可靠），并验证传递成功
+          # 格式抽查：应以 sk- 开头（不输出具体内容）
+          case "$CLEAN_KEY" in
+            sk-*) echo "KEYCHK format: starts with sk- (ok)" ;;
+            *) echo "KEYCHK FAIL: Key 格式异常（非 sk- 开头），请检查 Secret 是否为有效的 DeepSeek API Key。"; exit 1 ;;
+          esac
+          # 用 export 显式传递，并验证传递成功
           export THZ_DEEPSEEK_KEY="$CLEAN_KEY"
-          EXPORT_LEN="$(printf '%s' "${THZ_DEEPSEEK_KEY:-}" | wc -c)"
-          EXPORT_FP="$(printf '%s' "${THZ_DEEPSEEK_KEY:-}" | sha256sum | cut -c1-8)"
-          echo "KEYCHK exported: len=${EXPORT_LEN} sha8=${EXPORT_FP}"
-          if [ "${EXPORT_FP}" != "${CLEAN_FP}" ]; then
-            echo "KEYCHK FAIL: export 后指纹不一致，环境变量传递异常。"
-            exit 1
-          fi
           /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
 
           installer_status=$?

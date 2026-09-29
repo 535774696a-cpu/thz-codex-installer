@@ -858,10 +858,13 @@ read_deepseek_key_ci_stdin() {
 }
 
 read_deepseek_key_once() {
-    # 安全诊断：只记录长度和存在性，绝不记录 Key 内容
-    # 注意：不用 "DIAG" 前缀（疑似被日志过滤），改用 "KEYCHK"
+    # 入口诊断：确认 CI 模式与环境变量状态（只记长度，不记内容）
     if [ "$CI_KEY_STDIN" -eq 1 ]; then
-        write_warn "KEYCHK key-input: CI_KEY_STDIN=1, THZ_DEEPSEEK_KEY_len=${#THZ_DEEPSEEK_KEY:-0}"
+        if [ -n "${THZ_DEEPSEEK_KEY:-}" ]; then
+            write_warn "KEYCHK: env var present, len=${#THZ_DEEPSEEK_KEY}"
+        else
+            write_warn "KEYCHK: env var MISSING or empty, falling back to stdin"
+        fi
     fi
     if [ "$CI_KEY_STDIN" -eq 1 ]; then
         # 优先从环境变量读取（CI 管道 stdin 不可靠）
