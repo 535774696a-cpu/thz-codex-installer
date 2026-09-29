@@ -859,10 +859,16 @@ read_deepseek_key_ci_stdin() {
 
 read_deepseek_key_once() {
     if [ "$CI_KEY_STDIN" -eq 1 ]; then
-        entered_key="$(read_deepseek_key_ci_stdin)" || {
-            write_warn "CI 模式：未能从 stdin 读取到 API Key。"
-            return 1
-        }
+        # 优先从环境变量读取（CI 管道 stdin 不可靠）
+        if [ -n "${THZ_DEEPSEEK_KEY:-}" ]; then
+            entered_key="$THZ_DEEPSEEK_KEY"
+            write_warn "CI 模式：从环境变量读取到 API Key。"
+        else
+            entered_key="$(read_deepseek_key_ci_stdin)" || {
+                write_warn "CI 模式：未能从 stdin 读取到 API Key。"
+                return 1
+            }
+        fi
     else
         entered_key="$(read_deepseek_key_gui)"
         gui_status=$?
