@@ -231,7 +231,8 @@ jobs:
 
           TOKEN="$token" perl -0pi -e 's#__BASE_URL__#$ENV{STAGING_API_BASE_URL}#g; s#__INSTALL_TOKEN__#$ENV{TOKEN}#g' \
             "$work_dir/install-macos.sh"
-          "$work_dir/install-macos.sh"
+          # 注意：install_token 是一次性的，此处不再单独运行 installer（会消耗 token），
+          # 直接进入下面的正式测试运行。
 
           marker="$work_dir/log-marker"
           output_file="$work_dir/output.log"
