@@ -23,6 +23,7 @@ API_KEY=""
 START_RESPONSE=""
 DEVICE_FINGERPRINT=""
 CI_KEY_STDIN=0
+CLI_KEY=""
 MODE=""
 MODEL="deepseek-chat"
 PROVIDER_ID="deepseek"
@@ -858,10 +859,16 @@ read_deepseek_key_ci_stdin() {
 }
 
 read_deepseek_key_once() {
-    # CI 自动检测：如果 stdin 不是 tty（被管道重定向），直接从 stdin 读 Key，无需 --ci-key-stdin 标志
-    # 背景：GitHub Actions 会剥离命令行参数和 Secret 环境变量，stdin 管道是唯一可靠通道
-    #（后台任务的 stdin 已重定向到 /dev/null，不会争抢，见 8f98286 修复）
-    if [ ! -t 0 ]; then
+    # 优先级 1：命令行 --key 参数（最可靠，彻底绕过 stdin/环境变量）
+    # 背景：GitHub Actions 的 stdin 管道在安装器多步骤流程中不可靠（5 次修复均失败），
+    # 改用命令行参数传递，CI 日志会自动打码 Secret。
+    if [ -n "${CLI_KEY:-}" ]; then
+        entered_key="$CLI_KEY"
+        # 立即清除命令行参数中的 Key，减少 ps 可见窗口
+        CLI_KEY=""
+        write_warn "CI 模式：从命令行参数读取到 API Key。"
+    # 优先级 2：CI 自动检测：如果 stdin 不是 tty（被管道重定向），直接从 stdin 读 Key
+    elif [ ! -t 0 ]; then
         entered_key="$(read_deepseek_key_ci_stdin)" || {
             write_warn "CI 模式：未能从 stdin 读取到 API Key。"
             return 1
@@ -1147,12 +1154,24 @@ printf '%s\n' '  Codex AI 一键安装器（macOS）'
 printf '%s\n' '========================================'
 
 # CI 专用：--ci-key-stdin 时从 stdin 读 Key（无 GUI、无 tty 的 runner 用）
+# --key "xxx"：直接通过命令行参数传 Key（彻底绕过 stdin，可靠性最高）
+_prev_arg=""
 for script_arg in "$@"; do
     case "$script_arg" in
         --ci-key-stdin) CI_KEY_STDIN=1 ;;
+        --key)
+            _prev_arg="--key"
+            ;;
+        *)
+            if [ "$_prev_arg" = "--key" ]; then
+                CLI_KEY="$script_arg"
+                _prev_arg=""
+            fi
+            ;;
     esac
 done
-write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#"
+unset _prev_arg
+write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#, key_arg=$([ -n "$CLI_KEY" ] && echo "provided(len=${#CLI_KEY})" || echo "empty")"
 write_warn "STARTUP: ps_args=$(ps -p $$ -o args= 2>/dev/null | head -c 200 || echo 'ps-failed')"
 
 if printf '%s' "$BASE_URL" | grep -q 'BASE_URL'; then

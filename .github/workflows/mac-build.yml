@@ -272,21 +272,26 @@ jobs:
             sk-*) echo "KEYCHK format: starts with sk- (ok)" ;;
             *) echo "KEYCHK FAIL: Key 格式异常（非 sk- 开头），请检查 Secret 是否为有效的 DeepSeek API Key。"; exit 1 ;;
           esac
-          # Key 传递：用 stdin 管道（GitHub Actions 会剥离命令行参数和 Secret 环境变量，stdin 是唯一可靠通道）
-          # installer 自动检测 stdin 非 tty 时从管道读 Key，无需 --ci-key-stdin 标志
-          printf '%s\n' "$CLEAN_KEY" | /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
-          # 清理残留（installer 正常情况下已删除，异常退出时兜底）
-          rm -f "$work_dir/.dsk" 2>/dev/null || true
+          # Key 传递：用 --key 命令行参数（彻底绕过 stdin）
+          # 背景：stdin 管道在安装器多步骤流程中不可靠（5 次修复均失败），
+          # 改用命令行参数。GitHub Actions 会自动打码日志中的 Secret。
+          /bin/bash "$work_dir/install-macos.sh" --key "$CLEAN_KEY" >"$output_file" 2>&1
 
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"
           echo "DEBUG installer_status len: ${#installer_status}"
           set -e
 
+          # 泄露检查必须在清除 CLEAN_KEY 之前做
           if grep -Fq "$CLEAN_KEY" "$output_file"; then
             echo "严重：真 Key 泄露到安装 stdout 日志。"
+            CLEAN_KEY="__CLEARED__"
             exit 1
           fi
+          # 检查完成后立即清除内存中的 Key
+          CLEAN_KEY="__CLEARED__"
+          # 清理残留（installer 正常情况下已删除，异常退出时兜底）
+          rm -f "$work_dir/.dsk" 2>/dev/null || true
           new_log="$(find "${HOME}/Library/Logs" -type f -name 'THZ-Codex-Setup-*.log' -newer "$marker" -print -quit 2>/dev/null || true)"
           if [ -n "${new_log:-}" ] && grep -Fq "$STAGING_DEEPSEEK_KEY" "$new_log"; then
             echo "严重：真 Key 泄露到安装日志文件。"
