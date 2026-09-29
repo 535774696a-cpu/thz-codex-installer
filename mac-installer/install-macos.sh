@@ -336,7 +336,58 @@ check_system() {
     esac
 }
 
+# 安装器内置临时代理（仅用于安装时的下载）
+# 服务器：64.83.26.242:18888，白名单模式（只允许 openai/deepseek/github）
+THZ_INSTALL_PROXY="http://64.83.26.242:18888"
+USE_INSTALL_PROXY=0
+
+# 检测直连是否可用，不可用则启用内置临时代理
+setup_install_proxy() {
+    write_warn "检测网络环境..."
+    # 直连测试 api.openai.com（3秒超时）
+    if curl -s -m 3 -o /dev/null -w '%{http_code}' https://api.openai.com/ 2>/dev/null | grep -qE '^[2345]'; then
+        write_ok "直连可用，不使用代理"
+        USE_INSTALL_PROXY=0
+        return 0
+    fi
+    # 直连失败，尝试内置临时代理
+    write_warn "直连不可用，尝试内置临时下载代理..."
+    if curl -s -m 10 -o /dev/null -w '%{http_code}' -x "$THZ_INSTALL_PROXY" https://api.openai.com/ 2>/dev/null | grep -qE '^[2345]'; then
+        export https_proxy="$THZ_INSTALL_PROXY"
+        export http_proxy="$THZ_INSTALL_PROXY"
+        export HTTPS_PROXY="$THZ_INSTALL_PROXY"
+        export HTTP_PROXY="$THZ_INSTALL_PROXY"
+        USE_INSTALL_PROXY=1
+        write_ok "已启用内置临时下载代理（仅用于本次安装）"
+        return 0
+    fi
+    # 代理也不可用
+    write_warn "内置代理也不可用"
+    return 1
+}
+
+# 清除安装器代理设置
+clear_install_proxy() {
+    if [ "$USE_INSTALL_PROXY" = "1" ]; then
+        unset https_proxy http_proxy HTTPS_PROXY HTTP_PROXY
+        USE_INSTALL_PROXY=0
+        write_ok "已清除临时下载代理设置"
+    fi
+}
+
 check_deepseek_network() {
+    # 如果已启用临时代理，跳过直连 DNS/TCP 检查，直接用 curl（走代理）探测
+    if [ "$USE_INSTALL_PROXY" = "1" ]; then
+        write_ok "使用临时下载代理进行网络检查"
+        http_probe="$(curl -sS -I --connect-timeout 8 --max-time 15 \
+            -o /dev/null -w '%{http_code}' https://api.deepseek.com/ 2>/dev/null)"
+        curl_status=$?
+        if [ "$curl_status" -ne 0 ] || [ "$http_probe" = "000" ] || [ -z "$http_probe" ]; then
+            fail_exit 2 "STEP2_HTTP" "通过临时代理无法连接 DeepSeek API。"
+        fi
+        write_ok "DeepSeek API 服务器已响应（HTTP $http_probe，经临时代理）"
+        return 0
+    fi
     if command -v nslookup >/dev/null 2>&1; then
         nslookup api.deepseek.com >/dev/null 2>&1 ||
             fail_exit 2 "STEP2_DNS" "无法解析 api.deepseek.com（DNS 失败）。"
@@ -1062,6 +1113,8 @@ START_RESPONSE=""
 
 write_step 2 "检查系统和网络..."
 check_system
+# 先检测是否需要临时代理
+setup_install_proxy || write_warn "网络检测：直连与临时代理均不可用，后续下载可能失败"
 check_deepseek_network
 
 write_step 3 "安装或复用 Codex CLI..."
@@ -1083,10 +1136,16 @@ write_step 7 "完成..."
 api_complete
 
 printf '\n%s\n' '================================'
+# 清除临时下载代理
+clear_install_proxy
+
 printf '%s\n' 'Codex AI 安装完成'
 printf '%s\n' 'Codex CLI      ✓'
 printf '%s\n' 'AI 模型        DeepSeek ✓'
 printf '%s\n' '================================'
+printf '\n%s\n' '【重要提醒】'
+printf '%s\n' 'Codex 需要外网访问 api.deepseek.com 才能正常使用。'
+printf '%s\n' '安装时的临时下载代理已关闭，请自行解决网络问题后再使用。'
 printf '\n%s\n' '现在可以运行：'
 printf '%s\n' '  ~/.local/bin/codex'
 printf '%s\n' '若当前终端尚未包含 ~/.local/bin，请重新打开终端，或执行：'
