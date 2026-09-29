@@ -262,8 +262,9 @@ jobs:
           # 背景：GitHub Actions 会拦截任何 sk- 开头的值（即使是 mock Key），无法从外部传入 Secret。
           # 改用纯标志位（不含 Secret，GH 不拦截），installer 内部生成 mock Key 完整测试流程。
           # installer 只做格式校验不调在线 API，mock Key 可完整验证 Step 5（配置写入、校验）。
-          CI_MOCK_MODE=1 \
-            /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
+          export CI_MOCK_MODE=1
+          echo "DEBUG: CI_MOCK_MODE in workflow=${CI_MOCK_MODE}"
+          /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
 
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"
