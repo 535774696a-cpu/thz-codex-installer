@@ -258,14 +258,13 @@ jobs:
           # 注意：本步骤不引用 STAGING_DEEPSEEK_KEY（GitHub 会因此锁定整个步骤的 env 传递）。
           # CI 使用 installer 内部 mock Key（CI_MOCK_MODE=1），完整测试安装流程。
           # Secret 有效性校验已移至独立步骤（不运行 installer）。
-          # Key 传递：创建空标志文件（installer 检测文件存在性）
-          # 背景：GitHub Actions 拦截 env/arg 传递（即使不含 Secret），改用空文件作为标志。
-          # 空文件不含任何 Secret 内容，GH 不拦截。installer 检测到文件即使用内部 mock Key。
-          # installer 只做格式校验不调在线 API，mock Key 可完整验证 Step 5（配置写入、校验）。
-          touch "${RUNNER_TEMP}/thz-ci-mock-mode"
+          # Key 传递：CI_SKIP_KEY_INPUT=1（跳过输入环节，installer 内部用 mock Key）
+          # 背景：GitHub Actions 拦截所有外部 Key 传递方式，无法测试输入环节。
+          # CI_SKIP_KEY_INPUT 只跳过输入，保留完整断言：格式校验、配置写入、写后校验。
+          # 本步骤不引用任何 Secret，GH 不会锁定 env 传递。
+          export CI_SKIP_KEY_INPUT=1
           /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
-          # 清理标志文件
-          rm -f "${RUNNER_TEMP}/thz-ci-mock-mode" 2>/dev/null || true
+          unset CI_SKIP_KEY_INPUT
 
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"

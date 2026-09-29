@@ -1122,42 +1122,59 @@ verify_written_config() {
 }
 
 setup_deepseek_key() {
-    attempt=1
-    while [ "$attempt" -le 3 ]; do
-        [ "$attempt" -eq 1 ] || write_warn "第 $attempt 次输入（最多 3 次）"
+    # CI 专用：CI_SKIP_KEY_INPUT=1 时跳过 Key 输入环节，直接使用内部 mock Key
+    # 背景：GitHub Actions 拦截所有外部 Key 传递方式（stdin/env/arg/文件），无法测试输入环节。
+    # 此标志跳过输入但保留完整断言：格式校验、配置写入、写后校验，确保 Step 5 核心逻辑被测试。
+    # 输入环节（read_deepseek_key_once）在真实用户场景由人工输入，不在 CI 测试范围内。
+    if [ "${CI_SKIP_KEY_INPUT:-0}" = "1" ]; then
+        write_warn "CI 模式：跳过 Key 输入环节，使用内部 mock Key（CI_SKIP_KEY_INPUT=1）。"
+        API_KEY="sk-ci-mock-test-key-12345678901234567890"
+    else
+        attempt=1
+        while [ "$attempt" -le 3 ]; do
+            [ "$attempt" -eq 1 ] || write_warn "第 $attempt 次输入（最多 3 次）"
 
-        read_deepseek_key_once
-        read_status=$?
-        case "$read_status" in
-            0) ;;
-            2) fail_exit 5 "STEP5_CANCEL" "用户取消输入，安装已安全退出。" ;;
-            3)
-                attempt=$((attempt + 1))
-                continue
-                ;;
-            *) fail_exit 5 "STEP5_INPUT" "无法读取 API Key。" ;;
-        esac
-
-        # 只做格式校验，不调在线 API（在线验证曾因环境问题误报 401）
-        if validate_deepseek_key_format; then
-            write_ok "DeepSeek Key 格式校验通过（sk- 开头，长度 ${#API_KEY}）"
-            write_warn "提示：Key 有效性将在首次实际调用 DeepSeek API 时验证"
-            break
-        else
-            write_warn "Key 格式不正确（应为 sk- 开头的长字符串）。"
-        fi
-
-        API_KEY=""
-        if [ "$attempt" -lt 3 ] && [ "$CI_KEY_STDIN" -ne 1 ]; then
-            printf '%s' "是否重新输入 Key？(y=重输 / n=退出)：" >/dev/tty
-            IFS= read -r retry_answer </dev/tty || retry_answer="n"
-            case "$retry_answer" in
-                y|Y|yes|YES) ;;
-                *) fail_exit 5 "STEP5_KEY" "已退出：API Key 验证失败。" ;;
+            read_deepseek_key_once
+            read_status=$?
+            case "$read_status" in
+                0) ;;
+                2) fail_exit 5 "STEP5_CANCEL" "用户取消输入，安装已安全退出。" ;;
+                3)
+                    attempt=$((attempt + 1))
+                    continue
+                    ;;
+                *) fail_exit 5 "STEP5_INPUT" "无法读取 API Key。" ;;
             esac
+
+            # 只做格式校验，不调在线 API（在线验证曾因环境问题误报 401）
+            if validate_deepseek_key_format; then
+                write_ok "DeepSeek Key 格式校验通过（sk- 开头，长度 ${#API_KEY}）"
+                write_warn "提示：Key 有效性将在首次实际调用 DeepSeek API 时验证"
+                break
+            else
+                write_warn "Key 格式不正确（应为 sk- 开头的长字符串）。"
+            fi
+
+            API_KEY=""
+            if [ "$attempt" -lt 3 ] && [ "$CI_KEY_STDIN" -ne 1 ]; then
+                printf '%s' "是否重新输入 Key？(y=重输 / n=退出)：" >/dev/tty
+                IFS= read -r retry_answer </dev/tty || retry_answer="n"
+                case "$retry_answer" in
+                    y|Y|yes|YES) ;;
+                    *) fail_exit 5 "STEP5_KEY" "已退出：API Key 验证失败。" ;;
+                esac
+            fi
+            attempt=$((attempt + 1))
+        done
+    fi
+
+    # 格式校验（CI_SKIP_KEY_INPUT 模式下验证 mock Key 格式）
+    if [ "${CI_SKIP_KEY_INPUT:-0}" = "1" ]; then
+        if ! validate_deepseek_key_format; then
+            fail_exit 5 "STEP5_KEY" "Mock Key 格式校验失败（内部错误）。"
         fi
-        attempt=$((attempt + 1))
-    done
+        write_ok "DeepSeek Key 格式校验通过（sk- 开头，长度 ${#API_KEY}）"
+    fi
 
     if [ -z "$API_KEY" ]; then
         fail_exit 5 "STEP5_KEY" "API Key 验证失败次数过多，已安全退出。"
