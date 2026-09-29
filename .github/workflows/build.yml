@@ -3,6 +3,16 @@ name: Build
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "构建模式：test=测试包(staging 地址+TestHook)，production=生产包(https://codex.thz.quest，无 TestHook)"
+        required: false
+        default: "test"
+        type: choice
+        options:
+          - test
+          - production
 
 jobs:
   build:
@@ -62,7 +72,15 @@ jobs:
       - name: Compile
         run: |
           $ErrorActionPreference = 'Stop'
-          .\exe-src\build.ps1 -BaseUrl 'http://64.83.26.242:18081' -TestHook -OutDir (Join-Path $PWD 'dist')
+          $mode = '${{ inputs.mode }}'
+          if (-not $mode) { $mode = 'test' }
+          if ($mode -eq 'production') {
+            Write-Host 'Production build: BaseUrl=https://codex.thz.quest, no TestHook'
+            .\exe-src\build.ps1 -BaseUrl 'https://codex.thz.quest' -OutDir (Join-Path $PWD 'dist')
+          } else {
+            Write-Host 'Test build: BaseUrl=http://64.83.26.242:18081, with TestHook'
+            .\exe-src\build.ps1 -BaseUrl 'http://64.83.26.242:18081' -TestHook -OutDir (Join-Path $PWD 'dist')
+          }
 
       - name: Ticket stamping smoke test
         run: |
