@@ -255,26 +255,32 @@ jobs:
           echo "--- end diagnostic ---"
 
           set +e
+          # Canary 测试：非 Secret 的环境变量能否传递到子进程？
+          # 如果 canary 能通过但 Secret 不能 → GitHub 在剥离 Secret
+          # 如果 canary 也不能通过 → 通用环境变量传递问题
+          export THZ_CANARY="canary-ok-12345"
+          /bin/bash -c 'echo "CANARY_RESULT: [$THZ_CANARY]"'
           # 安全诊断链：只记录长度和 SHA-256 短指纹，绝不输出 Key 明文/前后缀
           # 目的：明确区分 Secret 为空 / 环境变量丢失 / stdin 被消耗 三种失败
+          # 注意：不用 "DIAG" 前缀（疑似被日志过滤），改用 "KEYCHK"
           SECRET_LEN="$(printf '%s' "${STAGING_DEEPSEEK_KEY:-}" | wc -c)"
           SECRET_FP="$(printf '%s' "${STAGING_DEEPSEEK_KEY:-}" | sha256sum | cut -c1-8)"
-          echo "DIAG secret: len=${SECRET_LEN} sha8=${SECRET_FP}"
+          echo "KEYCHK secret: len=${SECRET_LEN} sha8=${SECRET_FP}"
           CLEAN_KEY="$(printf '%s' "${STAGING_DEEPSEEK_KEY:-}" | tr -d '\n\r')"
           CLEAN_LEN="$(printf '%s' "${CLEAN_KEY:-}" | wc -c)"
           CLEAN_FP="$(printf '%s' "${CLEAN_KEY:-}" | sha256sum | cut -c1-8)"
-          echo "DIAG cleankey: len=${CLEAN_LEN} sha8=${CLEAN_FP}"
+          echo "KEYCHK cleankey: len=${CLEAN_LEN} sha8=${CLEAN_FP}"
           if [ "${CLEAN_LEN}" -eq 0 ]; then
-            echo "DIAG FAIL: CLEAN_KEY 为空（Secret 可能只含空白/换行，或 tr 处理异常）。"
+            echo "KEYCHK FAIL: CLEAN_KEY 为空（Secret 可能只含空白/换行，或 tr 处理异常）。"
             exit 1
           fi
           # 用 export 显式传递（比 VAR=val cmd 前缀更可靠），并验证传递成功
           export THZ_DEEPSEEK_KEY="$CLEAN_KEY"
           EXPORT_LEN="$(printf '%s' "${THZ_DEEPSEEK_KEY:-}" | wc -c)"
           EXPORT_FP="$(printf '%s' "${THZ_DEEPSEEK_KEY:-}" | sha256sum | cut -c1-8)"
-          echo "DIAG exported: len=${EXPORT_LEN} sha8=${EXPORT_FP}"
+          echo "KEYCHK exported: len=${EXPORT_LEN} sha8=${EXPORT_FP}"
           if [ "${EXPORT_FP}" != "${CLEAN_FP}" ]; then
-            echo "DIAG FAIL: export 后指纹不一致，环境变量传递异常。"
+            echo "KEYCHK FAIL: export 后指纹不一致，环境变量传递异常。"
             exit 1
           fi
           /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1

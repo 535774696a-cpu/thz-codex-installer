@@ -859,8 +859,9 @@ read_deepseek_key_ci_stdin() {
 
 read_deepseek_key_once() {
     # 安全诊断：只记录长度和存在性，绝不记录 Key 内容
+    # 注意：不用 "DIAG" 前缀（疑似被日志过滤），改用 "KEYCHK"
     if [ "$CI_KEY_STDIN" -eq 1 ]; then
-        write_warn "DIAG key-input: CI_KEY_STDIN=1, THZ_DEEPSEEK_KEY_len=${#THZ_DEEPSEEK_KEY:-0}"
+        write_warn "KEYCHK key-input: CI_KEY_STDIN=1, THZ_DEEPSEEK_KEY_len=${#THZ_DEEPSEEK_KEY:-0}"
     fi
     if [ "$CI_KEY_STDIN" -eq 1 ]; then
         # 优先从环境变量读取（CI 管道 stdin 不可靠）
