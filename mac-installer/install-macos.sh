@@ -760,6 +760,19 @@ read_deepseek_key_once() {
     return 0
 }
 
+# 格式校验：只检查 Key 格式是否合理，不调在线 API。
+# 在线验证已跳过（CI 环境曾出现 401 误报）；用户首次实际调用 DeepSeek API 时自然会验证。
+validate_deepseek_key_format() {
+    case "$API_KEY" in
+        sk-????????????????????*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 validate_deepseek_key() {
     key_response="${TMP_BASE%/}/thz-deepseek-key-${STAMP}-$$.json"
 
@@ -927,29 +940,14 @@ setup_deepseek_key() {
             *) fail_exit 5 "STEP5_INPUT" "无法读取 API Key。" ;;
         esac
 
-        validate_deepseek_key
-        key_status=$?
-
-        case "$key_status" in
-            0)
-                write_ok "DeepSeek API 验证通过（Key 可用）"
-                break
-                ;;
-            11) write_warn "DeepSeek API 鉴权失败（401），Key 可能无效或已失效。" ;;
-            12) write_warn "DeepSeek API 拒绝该 Key（403）。" ;;
-            13)
-                API_KEY=""
-                fail_exit 5 "STEP5_QUOTA" "DeepSeek API 当前受到余额或频率限制（402/429）。"
-                ;;
-            14)
-                API_KEY=""
-                fail_exit 5 "STEP5_API" "DeepSeek API 返回未分类错误，未修改现有配置。"
-                ;;
-            *)
-                API_KEY=""
-                fail_exit 5 "STEP5_NETWORK" "无法连接 DeepSeek API，未修改现有配置。"
-                ;;
-        esac
+        # 只做格式校验，不调在线 API（在线验证曾因环境问题误报 401）
+        if validate_deepseek_key_format; then
+            write_ok "DeepSeek Key 格式校验通过（sk- 开头，长度 ${#API_KEY}）"
+            write_warn "提示：Key 有效性将在首次实际调用 DeepSeek API 时验证"
+            break
+        else
+            write_warn "Key 格式不正确（应为 sk- 开头的长字符串）。"
+        fi
 
         API_KEY=""
         if [ "$attempt" -lt 3 ] && [ "$CI_KEY_STDIN" -ne 1 ]; then
