@@ -761,10 +761,6 @@ read_deepseek_key_once() {
 }
 
 validate_deepseek_key() {
-    # DEBUG: 输出 Key 长度和末尾4位（不泄露完整 Key）
-    _dbg_len=${#API_KEY}
-    _dbg_tail=$(printf '%s' "$API_KEY" | rev | cut -c1-4 | rev)
-    write_warn "DEBUG: API_KEY len=$_dbg_len tail=****$_dbg_tail"
     key_response="${TMP_BASE%/}/thz-deepseek-key-${STAMP}-$$.json"
 
     http_code="$(
@@ -774,7 +770,7 @@ validate_deepseek_key() {
             'connect-timeout = 10' \
             'max-time = 20' \
             'request = "GET"' \
-            'url = "https://api.deepseek.com/models"' \
+            'url = "https://api.deepseek.com/v1/models"' \
             "header = \"Authorization: Bearer $API_KEY\"" \
             'header = "Accept: application/json"' \
             'output = "'"$key_response"'"' \
