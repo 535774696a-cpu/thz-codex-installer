@@ -349,7 +349,6 @@ probe_domain_direct() {
 
     attempt=1
     while [ "$attempt" -le 2 ]; do
-        ip=""
         dns_ok=1
         tcp_ok=1
 
