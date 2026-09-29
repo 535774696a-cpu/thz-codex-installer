@@ -184,8 +184,10 @@ jobs:
             status=$?
             set -e
 
-            if [ "$status" -eq 0 ]; then
-              echo "假 DeepSeek Key 测试未按预期失败（第 $iter 次）。"
+            # 安装器应拒绝假 Key：检查输出中有失败标记（exit code 在 CI 管道中不可靠）
+            if ! grep -q "API Key 验证失败" "$output_file"; then
+              echo "假 DeepSeek Key 测试未按预期失败（第 $iter 次），输出："
+              tail -20 "$output_file"
               exit 1
             fi
 
