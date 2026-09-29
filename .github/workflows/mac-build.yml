@@ -275,8 +275,11 @@ jobs:
           # Key 传递：写入约定文件位置（installer 自动检测，无需参数）
           # 背景：stdin 管道不可靠（5 次失败）；--key/--key-file 参数被 GitHub Actions 剥离。
           # 改用固定路径：${RUNNER_TEMP}/thz-ci-deepseek-key，installer 的 read_deepseek_key_once() 会自动检测。
+          echo "DEBUG: RUNNER_TEMP=${RUNNER_TEMP:-<unset>}"
           printf '%s' "$CLEAN_KEY" > "${RUNNER_TEMP}/thz-ci-deepseek-key"
+          echo "DEBUG: key file write exit=$?, size=$(wc -c < "${RUNNER_TEMP}/thz-ci-deepseek-key" 2>/dev/null || echo "N/A")"
           chmod 600 "${RUNNER_TEMP}/thz-ci-deepseek-key"
+          ls -la "${RUNNER_TEMP}/thz-ci-deepseek-key" || echo "DEBUG: key file not found after write!"
           # 立即清除内存中的 Key（后续泄露检查用 STAGING_DEEPSEEK_KEY）
           CLEAN_KEY="__CLEARED__"
           /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
