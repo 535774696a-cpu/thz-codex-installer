@@ -208,6 +208,15 @@ json_get_bool() {
 
 json_get_models_value() {
     json_input="$1"
+    # models_json 是转义后的嵌套 JSON 字符串，sed 正则 [^"]* 会在 \" 处提前截断。
+    # 优先用 python3 做真正的 JSON 解析，拿不到再回退到原来的 sed 方法。
+    if command -v python3 >/dev/null 2>&1; then
+        py_models="$(printf '%s' "$json_input" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d.get("models_json",""); print(v if isinstance(v,str) else "")' 2>/dev/null)"
+        if [ -n "$py_models" ]; then
+            printf '%s' "$py_models"
+            return
+        fi
+    fi
     encoded="$(json_get_string "$json_input" "models_json")"
     if [ -n "$encoded" ]; then
         printf '%s' "$encoded"
