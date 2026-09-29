@@ -170,9 +170,8 @@ jobs:
             token="$(printf '%s' "$token" | tr -d '\r\n')"
             test -n "$token"
 
-            perl -0pi -e 's#__BASE_URL__#$ENV{STAGING_API_BASE_URL}#g' \
+            TOKEN="$token" perl -0pi -e 's#__BASE_URL__#$ENV{STAGING_API_BASE_URL}#g; s#__INSTALL_TOKEN__#$ENV{TOKEN}#g' \
               "$work_dir/install-macos.sh"
-            THZ_TOKEN="$token" perl -0pi -e 's#__INSTALL_TOKEN__#\Q$ENV{THZ_TOKEN}\E#g' \
               "$work_dir/install-macos.sh"
 
             marker="$work_dir/log-marker"
@@ -226,10 +225,9 @@ jobs:
           token="$(printf '%s' "$token" | tr -d '\r\n')"
           test -n "$token"
 
-          perl -0pi -e 's#__BASE_URL__#$ENV{STAGING_API_BASE_URL}#g' \
+          TOKEN="$token" perl -0pi -e 's#__BASE_URL__#$ENV{STAGING_API_BASE_URL}#g; s#__INSTALL_TOKEN__#$ENV{TOKEN}#g' \
             "$work_dir/install-macos.sh"
-          THZ_TOKEN="$token" perl -0pi -e 's#__INSTALL_TOKEN__#\Q$ENV{THZ_TOKEN}\E#g' \
-            "$work_dir/install-macos.sh"
+          "$work_dir/install-macos.sh"
 
           marker="$work_dir/log-marker"
           output_file="$work_dir/output.log"
