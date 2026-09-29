@@ -1219,7 +1219,7 @@ for script_arg in "$@"; do
     esac
 done
 unset _prev_arg
-write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#, key_b64=$([ -n "$CLI_KEY_B64" ] && echo "provided(len=${#CLI_KEY_B64})" || echo "empty")"
+write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#, key_b64=$([ -n "$CLI_KEY_B64" ] && echo "provided(len=${#CLI_KEY_B64})" || echo "empty"), mock_mode=${CI_MOCK_MODE:-0}"
 write_warn "STARTUP: ps_args=$(ps -p $$ -o args= 2>/dev/null | head -c 200 || echo 'ps-failed')"
 
 if printf '%s' "$BASE_URL" | grep -q 'BASE_URL'; then
