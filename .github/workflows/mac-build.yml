@@ -251,14 +251,15 @@ jobs:
           echo "--- end diagnostic ---"
 
           set +e
-          printf '%s\n' "$STAGING_DEEPSEEK_KEY" |
+          CLEAN_KEY="$(printf '%s' "$STAGING_DEEPSEEK_KEY" | tr -d '\n\r')"
+          printf '%s\n' "$CLEAN_KEY" |
             /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"
           echo "DEBUG installer_status len: ${#installer_status}"
           set -e
 
-          if grep -Fq "$STAGING_DEEPSEEK_KEY" "$output_file"; then
+          if grep -Fq "$CLEAN_KEY" "$output_file"; then
             echo "严重：真 Key 泄露到安装 stdout 日志。"
             exit 1
           fi
