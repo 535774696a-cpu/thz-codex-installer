@@ -209,6 +209,14 @@ jobs:
         env:
           STAGING_DEEPSEEK_KEY: ${{ secrets.STAGING_DEEPSEEK_KEY }}
         run: |
+          # DIAGNOSTIC: 直接在 runner 上测试 Key（不经过安装器）
+          echo "=== DIAG: testing key directly on runner ==="
+          _dk="$(printf '%s' "$STAGING_DEEPSEEK_KEY" | tr -d '\n\r')"
+          echo "DIAG key len: ${#_dk}"
+          _code="$(curl -s -m 15 -o /dev/null -w '%{http_code}' https://api.deepseek.com/v1/models -H "Authorization: Bearer $_dk" || echo 'curl-failed')"
+          echo "DIAG direct curl http_code: $_code"
+          echo "=== DIAG done ==="
+          _dk=""
           set -eo pipefail
           installer_status=0
           if [ -z "${STAGING_DEEPSEEK_KEY:-}" ]; then
