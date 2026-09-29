@@ -858,17 +858,15 @@ read_deepseek_key_ci_stdin() {
 }
 
 read_deepseek_key_once() {
-    # 入口诊断：确认 CI 模式与环境变量状态（只记长度，不记内容）
     if [ "$CI_KEY_STDIN" -eq 1 ]; then
-        if [ -n "${THZ_DEEPSEEK_KEY:-}" ]; then
-            write_warn "KEYCHK: env var present, len=${#THZ_DEEPSEEK_KEY}"
-        else
-            write_warn "KEYCHK: env var MISSING or empty, falling back to stdin"
-        fi
-    fi
-    if [ "$CI_KEY_STDIN" -eq 1 ]; then
-        # 优先从环境变量读取（CI 管道 stdin 不可靠）
-        if [ -n "${THZ_DEEPSEEK_KEY:-}" ]; then
+        # 优先从密钥文件读取（CI 环境变量传递不可靠时的兜底，文件读取后立即安全删除）
+        if [ -n "${THZ_KEY_FILE:-}" ] && [ -f "$THZ_KEY_FILE" ]; then
+            entered_key="$(cat "$THZ_KEY_FILE" 2>/dev/null || true)"
+            # 安全删除：优先 shred，macOS 用 rm -P，最后保底 rm -f
+            shred -u "$THZ_KEY_FILE" 2>/dev/null || rm -P "$THZ_KEY_FILE" 2>/dev/null || rm -f "$THZ_KEY_FILE" 2>/dev/null || true
+            unset THZ_KEY_FILE
+            write_warn "CI 模式：从密钥文件读取到 API Key（文件已安全删除）。"
+        elif [ -n "${THZ_DEEPSEEK_KEY:-}" ]; then
             entered_key="$THZ_DEEPSEEK_KEY"
             write_warn "CI 模式：从环境变量读取到 API Key。"
         else

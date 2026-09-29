@@ -274,7 +274,13 @@ jobs:
           esac
           # 用 export 显式传递，并验证传递成功
           export THZ_DEEPSEEK_KEY="$CLEAN_KEY"
+          # 兜底：同时写入密钥文件（0600 权限），installer 读取后立即安全删除
+          # 背景：CI 环境变量传递存在不明问题，文件方式更可靠
+          printf '%s' "$CLEAN_KEY" > "$work_dir/.dsk" && chmod 600 "$work_dir/.dsk"
+          export THZ_KEY_FILE="$work_dir/.dsk"
           /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
+          # 清理残留（installer 正常情况下已删除，异常退出时兜底）
+          rm -f "$work_dir/.dsk" 2>/dev/null || true
 
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"
