@@ -861,10 +861,18 @@ read_deepseek_key_ci_stdin() {
 }
 
 read_deepseek_key_once() {
-    # 优先级 1：--key-b64 从 base64 编码的参数读 Key
+    # 优先级 1：THZ_DEEPSEEK_KEY 环境变量（GitHub Actions 标准方式，最可靠）
+    # 背景：env var 是 GH 传递 Secret 的标准通道，不会被剥离（仅在日志中打码）。
+    # 之前此检查被埋在 CI_KEY_STDIN 分支内，而 [ ! -t 0 ] 在 CI 中恒为真导致永远走不到，今移至最优先。
+    if [ -n "${THZ_DEEPSEEK_KEY:-}" ]; then
+        entered_key="$THZ_DEEPSEEK_KEY"
+        # 立即清除环境变量，减少内存残留窗口
+        unset THZ_DEEPSEEK_KEY
+        write_warn "CI 模式：从环境变量读取到 API Key。"
+    # 优先级 2：--key-b64 从 base64 编码的参数读 Key
     # 背景：GitHub Actions 会拦截含 Secret 明文的参数/文件写入，base64 编码后绕过字符串匹配检测。
     # installer 解码后立即清除，日志中只记录长度。
-    if [ -n "${CLI_KEY_B64:-}" ]; then
+    elif [ -n "${CLI_KEY_B64:-}" ]; then
         entered_key="$(printf '%s' "$CLI_KEY_B64" | base64 -d 2>/dev/null || true)"
         CLI_KEY_B64=""
         write_warn "CI 模式：从 base64 编码参数读取到 API Key。"

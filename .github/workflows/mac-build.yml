@@ -272,14 +272,14 @@ jobs:
             sk-*) echo "KEYCHK format: starts with sk- (ok)" ;;
             *) echo "KEYCHK FAIL: Key 格式异常（非 sk- 开头），请检查 Secret 是否为有效的 DeepSeek API Key。"; exit 1 ;;
           esac
-          # Key 传递：base64 编码后用 --key-b64 参数传递
-          # 背景：stdin 管道不可靠；--key 明文参数被 GH 剥离；文件写入被 GH 拦截。
-          # base64 编码后 GH 的字符串匹配检测不到 Secret，明文不落地。
-          KEY_B64="$(printf '%s' "$CLEAN_KEY" | base64)"
+          # Key 传递：THZ_DEEPSEEK_KEY 环境变量（GitHub Actions 标准方式）
+          # 背景：stdin 管道不可靠；命令行参数被 GH 剥离；文件写入被拦截。
+          # env var 是 GH 传递 Secret 的标准通道，不会被剥离（仅日志打码）。
+          # installer 的 read_deepseek_key_once() 优先从 THZ_DEEPSEEK_KEY 读取，用后立即 unset。
+          THZ_DEEPSEEK_KEY="$CLEAN_KEY" \
+            /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
           # 立即清除内存中的 Key 明文（后续泄露检查用 STAGING_DEEPSEEK_KEY）
           CLEAN_KEY="__CLEARED__"
-          /bin/bash "$work_dir/install-macos.sh" --key-b64 "$KEY_B64" >"$output_file" 2>&1
-          KEY_B64="__CLEARED__"
 
           installer_status=$?
           echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"
