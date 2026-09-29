@@ -254,6 +254,8 @@ jobs:
           printf '%s\n' "$STAGING_DEEPSEEK_KEY" |
             /bin/bash "$work_dir/install-macos.sh" --ci-key-stdin >"$output_file" 2>&1
           installer_status=$?
+          echo "DEBUG installer_status hex: $(printf '%s' "$installer_status" | od -An -tx1 | tr -d '\n')"
+          echo "DEBUG installer_status len: ${#installer_status}"
           set -e
 
           if grep -Fq "$STAGING_DEEPSEEK_KEY" "$output_file"; then
