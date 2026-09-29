@@ -156,7 +156,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Test C temporarily skipped"; exit 0
 
           for iter in $(seq 1 "$ITERATIONS"); do
             echo "=== Test C iteration $iter/$ITERATIONS ==="
