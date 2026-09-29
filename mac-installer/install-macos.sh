@@ -1144,6 +1144,7 @@ for script_arg in "$@"; do
     esac
 done
 write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#"
+write_warn "STARTUP: ps_args=$(ps -p $$ -o args= 2>/dev/null | head -c 200 || echo 'ps-failed')"
 
 if printf '%s' "$BASE_URL" | grep -q 'BASE_URL'; then
     fail_exit 1 "STEP1_CONFIG" "安装包配置不完整（缺少服务器地址），请重新下载。"
