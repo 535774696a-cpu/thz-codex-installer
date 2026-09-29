@@ -241,6 +241,13 @@ jobs:
             --data-binary '{"install_token":"dummy-token-for-connectivity-check-12345678","device_fingerprint":"0000000000000000000000000000000000000000000000000000000000000000","installer_version":"diag","os_type":"macos"}' \
             "${STAGING_API_BASE_URL}/api/installer/start")" || diag_code="curl-failed-$?"
           echo "diagnostic /start result: $diag_code (422/401=连通正常, curl-failed=连不上)"
+          echo "stamped BASE_URL in installer:"
+          grep -a "^BASE_URL=" "$work_dir/install-macos.sh" | cut -c1-80
+          echo "TMPDIR=${TMPDIR:-<unset>}"
+          ls -ld "${TMPDIR:-/tmp}" 2>&1
+          echo "replicate installer curl with -o to temp file:"
+          touch "${TMPDIR:-/tmp}/diag-write-test-$$.tmp" && echo "tmpdir writable: yes" || echo "tmpdir writable: NO"
+          rm -f "${TMPDIR:-/tmp}/diag-write-test-$$.tmp"
           echo "--- end diagnostic ---"
 
           set +e
