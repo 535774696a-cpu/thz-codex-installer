@@ -368,7 +368,6 @@ probe_domain_direct() {
             wait "$dns_pid_a" 2>/dev/null
             wait "$dns_pid_aaaa" 2>/dev/null
 
-            ip="$(awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }' "$dns_tmp_a")"
             if [ -s "$dns_tmp_a" ] || [ -s "$dns_tmp_aaaa" ]; then
                 dns_ok=0
             fi
