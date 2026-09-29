@@ -344,7 +344,7 @@ USE_INSTALL_PROXY=0
 # 检测直连是否可用，不可用则启用内置临时代理
 probe_domain_direct() {
     local domain="$1"
-    local attempt ip dns_ok tcp_ok http_code curl_status
+    local attempt dns_ok tcp_ok http_code curl_status
     local dns_tmp_a dns_tmp_aaaa
 
     attempt=1
