@@ -113,8 +113,35 @@ function Invoke-ForeignWebRequest {
         }
 
         Write-Host 'stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=proxy'
-        return Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Get `
-            -TimeoutSec $TimeoutSec -Proxy $proxyUrl
+        try {
+            return Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Get `
+                -TimeoutSec $TimeoutSec -Proxy $proxyUrl
+        } catch {
+            $pe = $_
+            $pType = $pe.Exception.GetType().FullName
+            $pWebStatus = 'NONE'
+            $pHttpStatus = 'NONE'
+            $pc = $pe.Exception
+            while ($null -ne $pc) {
+                if ($pc -is [System.Net.WebException]) {
+                    $pWebStatus = [string]$pc.Status
+                    try {
+                        if ($null -ne $pc.Response -and $null -ne $pc.Response.StatusCode) {
+                            $pHttpStatus = [int]$pc.Response.StatusCode
+                        }
+                    } catch {}
+                    break
+                }
+                $pc = $pc.InnerException
+            }
+            $pMsg = [string]$pe.Exception.Message
+            $pMsg = $pMsg -replace "`r`n", ' ' -replace "`n", ' ' -replace "`r", ' '
+            if ($pMsg.Length -gt 200) { $pMsg = $pMsg.Substring(0, 200) }
+            $pHost = 'UNKNOWN'
+            try { $pHost = ([Uri]$proxyUrl).Authority } catch {}
+            Write-Host ("stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=proxy_failed proxy_url={0} exception_type={1} web_status={2} http_status={3} message={4}" -f $pHost, $pType, $pWebStatus, $pHttpStatus, $pMsg)
+            throw
+        }
     }
 }
 $StandaloneBinDir     = Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin'
