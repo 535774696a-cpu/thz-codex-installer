@@ -308,6 +308,7 @@ Add-Type -AssemblyName System.Drawing
 
     Test-WindowsEnvironment
     $BASE_URL='https://thz.quest'
+try { "BASE_URL="+$BASE_URL | Out-File "$env:USERPROFILE\Desktop\thz-url.txt" -Encoding ascii } catch {}
     $script:InstallToken=[string]$env:THZ_INSTALL_TICKET
     Remove-Item Env:THZ_INSTALL_TICKET -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($script:InstallToken) -or $script:InstallToken -notmatch '^[A-Za-z0-9_-]{32,128}$') { throw 'INSTALLATION_TICKET_INVALID' }
