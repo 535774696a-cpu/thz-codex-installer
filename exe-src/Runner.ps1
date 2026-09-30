@@ -424,6 +424,7 @@ try { "BASE_URL="+$BASE_URL | Out-File "$env:USERPROFILE\Desktop\thz-url.txt" -E
     Invoke-ApiComplete
     Write-SafeDiagnostic 'PASS' 'NONE' '0'
     try { Stop-EmbeddedProxy } catch { }
+    try { Remove-EmbeddedProxy } catch { }
     Stop-InstallTranscript
     exit 0
 } catch {
@@ -438,6 +439,7 @@ try { "BASE_URL="+$BASE_URL | Out-File "$env:USERPROFILE\Desktop\thz-url.txt" -E
     # （C# 启动器丢弃了子进程 stdout，Write-Host 只服务于直接运行 PS1 的场景；
     # 持久化可发现性靠下面这行诊断日志桥接）。
     try { Stop-EmbeddedProxy } catch { }
+    try { Remove-EmbeddedProxy } catch { }
     Stop-InstallTranscript
     try {
         if ($script:InstallLogPath) {

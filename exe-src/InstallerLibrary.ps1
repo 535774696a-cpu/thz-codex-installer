@@ -54,7 +54,7 @@ $ScriptVersion = '4.6.0.0'
 # 我们的 Installer 只负责调用它 + 用 codex --version 做最终验证。
 $OfficialInstallerUrl = 'https://chatgpt.com/codex/install.ps1'
 
-# ---- 内置代理 (sing-box + hysteria2) ----
+# ---- 内置代理 (hysteria2) ----
 
 function Get-EmbeddedProxySubscription {
     [CmdletBinding()]
@@ -245,35 +245,35 @@ function Start-EmbeddedProxy {
         }
     }
 
-    $proxyDirectory = Join-Path $env:TEMP 'THZ-singbox'
-    $singBoxPath = Join-Path $proxyDirectory 'sing-box.exe'
-    $configPath = Join-Path $proxyDirectory 'config.json'
-    $stdoutLogPath = Join-Path $proxyDirectory 'sing-box.stdout.log'
-    $stderrLogPath = Join-Path $proxyDirectory 'sing-box.stderr.log'
-    $minimumCachedSize = 10MB
+    $proxyDirectory = Join-Path $env:TEMP 'THZ-hysteria'
+    $hysteriaPath = Join-Path $proxyDirectory 'hysteria.exe'
+    $configPath = Join-Path $proxyDirectory 'config.yaml'
+    $stdoutLogPath = Join-Path $proxyDirectory 'hysteria.stdout.log'
+    $stderrLogPath = Join-Path $proxyDirectory 'hysteria.stderr.log'
+    $minimumCachedSize = 1MB
 
     try {
         if (-not (Test-Path -LiteralPath $proxyDirectory)) {
             New-Item -ItemType Directory -Path $proxyDirectory -Force -ErrorAction Stop | Out-Null
         }
 
-        $downloadSingBox = $true
-        if (Test-Path -LiteralPath $singBoxPath -PathType Leaf) {
-            $existingFile = Get-Item -LiteralPath $singBoxPath -ErrorAction Stop
+        $downloadHysteria = $true
+        if (Test-Path -LiteralPath $hysteriaPath -PathType Leaf) {
+            $existingFile = Get-Item -LiteralPath $hysteriaPath -ErrorAction Stop
             if ($existingFile.Length -gt $minimumCachedSize) {
-                $downloadSingBox = $false
+                $downloadHysteria = $false
                 Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY binary_cache=hit'
             }
         }
 
-        if ($downloadSingBox) {
-            $singBoxUri = '{0}/static/sing-box.exe' -f $BASE_URL.TrimEnd('/')
-            $temporaryBinaryPath = Join-Path $proxyDirectory 'sing-box.exe.download'
+        if ($downloadHysteria) {
+            $hysteriaUri = '{0}/static/hysteria.exe' -f $BASE_URL.TrimEnd('/')
+            $temporaryBinaryPath = Join-Path $proxyDirectory 'hysteria.exe.download'
 
             Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY binary_download=start'
 
             Invoke-WebRequest `
-                -Uri $singBoxUri `
+                -Uri $hysteriaUri `
                 -OutFile $temporaryBinaryPath `
                 -UseBasicParsing `
                 -TimeoutSec 120 `
@@ -282,12 +282,12 @@ function Start-EmbeddedProxy {
             $downloadedFile = Get-Item -LiteralPath $temporaryBinaryPath -ErrorAction Stop
             if ($downloadedFile.Length -le $minimumCachedSize) {
                 Remove-Item -LiteralPath $temporaryBinaryPath -Force -ErrorAction SilentlyContinue
-                throw '下载的 sing-box 程序文件不完整。'
+                throw '下载的 hysteria 程序文件不完整。'
             }
 
             Move-Item `
                 -LiteralPath $temporaryBinaryPath `
-                -Destination $singBoxPath `
+                -Destination $hysteriaPath `
                 -Force `
                 -ErrorAction Stop
 
@@ -486,55 +486,39 @@ function Start-EmbeddedProxy {
             throw '无法为内置代理分配本地监听端口。'
         }
 
-        $tlsConfig = [ordered]@{
-            enabled     = $true
-            server_name = [string]$selectedNode.Sni
-            insecure    = [bool]$selectedNode.Insecure
-        }
+        # hysteria2 客户端使用 YAML 配置
+        # 参考: https://v2.hysteria.network/docs/advanced/Client-Configuration/
+        $yamlLines = New-Object System.Collections.Generic.List[string]
 
-        $outboundConfig = [ordered]@{
-            type        = 'hysteria2'
-            tag         = 'proxy'
-            server      = [string]$selectedNode.Server
-            server_port = [int]$selectedNode.ServerPort
-            password    = [string]$selectedNode.Password
-            tls         = $tlsConfig
-        }
-
+        # server: "host:port"
+        $yamlLines.Add(('server: "{0}:{1}"' -f $selectedNode.Server, $selectedNode.ServerPort))
+        # auth: password
+        $yamlLines.Add(('auth: "{0}"' -f $selectedNode.Password.Replace('"', '\"')))
+        # tls
+        $yamlLines.Add('tls:')
+        $yamlLines.Add(('  sni: "{0}"' -f $selectedNode.Sni.Replace('"', '\"')))
+        $yamlLines.Add(('  insecure: {0}' -f $selectedNode.Insecure.ToString().ToLower()))
+        # socks5 inbound
+        $yamlLines.Add('socks5:')
+        $yamlLines.Add(('  listen: "127.0.0.1:{0}"' -f $listenPort))
+        # obfs (salamander)
         if ($selectedNode.ObfsType -eq 'salamander') {
-            $outboundConfig['obfs'] = [ordered]@{
-                type     = 'salamander'
-                password = [string]$selectedNode.ObfsPassword
-            }
+            $yamlLines.Add('obfs:')
+            $yamlLines.Add('  type: "salamander"')
+            $yamlLines.Add(('  password: "{0}"' -f $selectedNode.ObfsPassword.Replace('"', '\"')))
         }
 
-        $singBoxConfig = [ordered]@{
-            log = [ordered]@{
-                level = 'warning'
-            }
-            inbounds = @(
-                [ordered]@{
-                    type        = 'mixed'
-                    tag         = 'mixed-in'
-                    listen      = '127.0.0.1'
-                    listen_port = [int]$listenPort
-                }
-            )
-            outbounds = @($outboundConfig)
-        }
-
-        $configJson = $singBoxConfig | ConvertTo-Json -Depth 10
         [IO.File]::WriteAllText(
             $configPath,
-            $configJson,
+            (($yamlLines -join "`n") + "`n"),
             (New-Object Text.UTF8Encoding($false))
         )
 
         Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_start=begin listen_port={0}' -f $listenPort)
 
         $process = Start-Process `
-            -FilePath $singBoxPath `
-            -ArgumentList @('run', '-c', $configPath) `
+            -FilePath $hysteriaPath `
+            -ArgumentList @('client', '-c', $configPath) `
             -WorkingDirectory $proxyDirectory `
             -NoNewWindow `
             -RedirectStandardOutput $stdoutLogPath `
@@ -577,10 +561,10 @@ function Start-EmbeddedProxy {
 
             $script:EmbeddedProxyProcess = $null
             $script:EmbeddedProxyUrl = $null
-            throw '内置代理启动超时，请查看 sing-box 日志。'
+            throw '内置代理启动超时，请查看 hysteria 日志。'
         }
 
-        $script:EmbeddedProxyUrl = 'http://127.0.0.1:{0}' -f $listenPort
+        $script:EmbeddedProxyUrl = 'socks5://127.0.0.1:{0}' -f $listenPort
 
         Write-Host (
             'stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_start=success proxy_url={0}' -f
@@ -603,6 +587,83 @@ function Start-EmbeddedProxy {
         $script:EmbeddedProxyProcess = $null
         $script:EmbeddedProxyUrl = $null
         throw ('启动内置代理失败：{0}' -f $_.Exception.Message)
+    }
+}
+
+function Test-DirectConnection {
+    <#
+    .SYNOPSIS
+        测试是否能直连境外，用于按需下载判断。
+    .DESCRIPTION
+        对目标 URL 发送轻量 HEAD 请求，10 秒超时。
+        成功返回 $true，失败返回 $false。全程 try/catch，不抛异常。
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+
+        [int]$TimeoutSec = 10
+    )
+
+    try {
+        $request = [Net.HttpWebRequest]::Create($Uri)
+        $request.Method = 'HEAD'
+        $request.Proxy = $null
+        $request.Timeout = $TimeoutSec * 1000
+
+        $response = $null
+        try {
+            $response = [Net.HttpWebResponse]$request.GetResponse()
+            return $true
+        }
+        finally {
+            if ($null -ne $response) { $response.Dispose() }
+        }
+    }
+    catch {
+        return $false
+    }
+}
+
+function Remove-EmbeddedProxy {
+    <#
+    .SYNOPSIS
+        彻底清理内置代理：停止进程 + 删除文件目录。
+    .DESCRIPTION
+        安装完成后调用，确保零残留。全程 try/catch，不抛异常。
+    #>
+    [CmdletBinding()]
+    param()
+
+    try {
+        # 1. 停止进程
+        if ($null -ne $script:EmbeddedProxyProcess) {
+            try {
+                if (-not $script:EmbeddedProxyProcess.HasExited) {
+                    $script:EmbeddedProxyProcess.Kill()
+                    $script:EmbeddedProxyProcess.WaitForExit(5000) | Out-Null
+                }
+            }
+            catch {
+            }
+            finally {
+                $script:EmbeddedProxyProcess = $null
+                $script:EmbeddedProxyUrl = $null
+            }
+        }
+
+        # 2. 删除代理目录
+        $proxyDirectory = Join-Path $env:TEMP 'THZ-hysteria'
+        if (Test-Path -LiteralPath $proxyDirectory) {
+            Remove-Item -LiteralPath $proxyDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Host 'stage=CLEANUP operation=EMBEDDED_PROXY cleanup=done'
+    }
+    catch {
+        # 清理失败不影响主流程
+        Write-Host 'stage=CLEANUP operation=EMBEDDED_PROXY cleanup=failed'
     }
 }
 
@@ -637,6 +698,19 @@ function Invoke-ForeignWebRequest {
 
         [int]$TimeoutSec = 30
     )
+
+    # P0 按需下载：先测试直连，直连可用则不下载代理
+    if (Test-DirectConnection -Uri $Uri -TimeoutSec 10) {
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=direct_probed'
+
+        return Invoke-WebRequest `
+            -Uri $Uri `
+            -UseBasicParsing `
+            -TimeoutSec $TimeoutSec `
+            -ErrorAction Stop
+    }
+
+    Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST direct_probed=failed'
 
     try {
         Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=direct'
