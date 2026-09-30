@@ -699,7 +699,7 @@ $StandaloneBinDir     = Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin'
 $StandaloneExe        = Join-Path $StandaloneBinDir 'codex.exe'
 
 # ---- 服务端替换的占位符 ----
-$BASE_URL       = 'https://thz.quest'
+$BASE_URL       = '__THZ_API_BASE_URL__'
 $TOKEN_EMB      = '__INSTALL_TOKEN__'
 
 # ---- 全局状态 ----
@@ -763,19 +763,27 @@ function Get-DeviceFingerprint {
 
 function Invoke-ApiStart {
     param([string]$Token = '')
+
     $useToken = $Token
     if ([string]::IsNullOrWhiteSpace($useToken)) { $useToken = $script:InstallToken }
     if ([string]::IsNullOrWhiteSpace($useToken)) { $useToken = [string]$env:THZ_INSTALL_TICKET }
     if ([string]::IsNullOrWhiteSpace($useToken)) { $useToken = $TOKEN_EMB }
     $script:InstallToken = $useToken
-    try { "TOKEN_DEBUG len=$($useToken.Length) prefix=$($useToken.Substring(0,[Math]::Min(15,$useToken.Length)))" | Out-File "$env:TEMP\thz-token-debug.txt" -Encoding ascii } catch {}
+
+    $useToken = ([string]$useToken).Trim().TrimStart([char]0xFEFF)
     if ([string]::IsNullOrWhiteSpace($useToken) -or $useToken -like '*INSTALL_TOKEN*') {
         throw '缺少安装授权。请回到安装网站重新下载安装包。'
+    }
+    if ($useToken -notmatch '\A[A-Za-z0-9_-]{64}\z') {
+        throw ("安装授权格式无效（长度={0}）。请回到安装网站重新下载安装包。" -f $useToken.Length)
     }
     if ($BASE_URL -like '*BASE_URL*') {
         throw '安装包配置不完整（缺少服务器地址）。请重新下载。'
     }
     $deviceFingerprint = Get-DeviceFingerprint
+    if (-not [string]::IsNullOrWhiteSpace($deviceFingerprint) -and $deviceFingerprint -notmatch '\A[0-9a-f]{64}\z') {
+        throw '设备指纹无效，请重新下载安装包。'
+    }
     $body = @{
         install_token = $useToken;
         device_fingerprint = $deviceFingerprint

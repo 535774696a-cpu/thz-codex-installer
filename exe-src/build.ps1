@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$BaseUrl = 'https://thz.quest',
     [string]$OutDir = (Join-Path $PSScriptRoot 'dist'),
     [switch]$TestHook
@@ -21,7 +21,7 @@ try {
     }
 
     Write-Host "Stamping BASE_URL in staged PowerShell resources"
-    $baseUrlPattern = '\$BASE_URL\s*=\s*''[^'']*'''
+    $baseUrlPattern = '\$BASE_URL\s*=\s*''__THZ_API_BASE_URL__'''
     $escapedBaseUrl = $BaseUrl.Replace("'", "''")
     $baseUrlAssignment = '$BASE_URL=''' + $escapedBaseUrl + ''''
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -32,8 +32,8 @@ try {
         $text = [System.IO.File]::ReadAllText($path)
         $matches = [System.Text.RegularExpressions.Regex]::Matches($text, $baseUrlPattern)
 
-        if ($matches.Count -lt 1) {
-            throw "BASE_URL assignment not found in $name"
+        if ($matches.Count -ne 1) {
+            throw "BASE_URL assignment count mismatch in ${name}: found $($matches.Count), expected 1"
         }
 
         $evaluator = [System.Text.RegularExpressions.MatchEvaluator]{ param($match) return $baseUrlAssignment }

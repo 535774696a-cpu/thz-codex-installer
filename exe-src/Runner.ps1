@@ -52,25 +52,81 @@ function Write-LicenseRequestEvent {
 }
 function Invoke-LicenseRequest {
     param([string]$Operation,[string]$Path,[string]$Body,[int]$TimeoutSec)
+
+    try {
+        $baseUri = [Uri]$BASE_URL
+    } catch {
+        throw 'BASE_URL 配置错误：无法解析服务地址。'
+    }
+    if ($baseUri.Scheme -ne 'https' -or $baseUri.DnsSafeHost -cne 'codex.thz.quest') {
+        throw 'BASE_URL 配置错误：服务地址必须为 https://codex.thz.quest。'
+    }
+
     Set-DiagnosticStage $Operation ($Operation+'_FAILED')
     Write-LicenseRequestEvent -Operation $Operation -State 'request_started' -Path $Path
+    $requestId = [Guid]::NewGuid().ToString('N')
+
     try {
-        $result=Invoke-RestMethod -Uri "$BASE_URL$Path" -Method Post -ContentType 'application/json' -Body $Body -TimeoutSec $TimeoutSec
-        # PowerShell 5.1 Invoke-RestMethod does not expose a success status code.
+        $request = [Net.HttpWebRequest]::Create("$BASE_URL$Path")
+        $request.Method = 'POST'
+        $request.ContentType = 'application/json'
+        $request.Proxy = $null
+        $request.Timeout = $TimeoutSec * 1000
+        $request.Headers['X-THZ-Request-ID'] = $requestId
+        $request.Headers['X-THZ-Installer-Version'] = [string]$script:InstallerVersion
+
+        $requestBytes = [Text.Encoding]::UTF8.GetBytes([string]$Body)
+        $request.ContentLength = $requestBytes.Length
+        $requestStream = $null
+        try {
+            $requestStream = $request.GetRequestStream()
+            $requestStream.Write($requestBytes, 0, $requestBytes.Length)
+        } finally {
+            if ($null -ne $requestStream) { $requestStream.Dispose() }
+        }
+
+        $response = $null
+        $reader = $null
+        try {
+            $response = [Net.HttpWebResponse]$request.GetResponse()
+            $reader = New-Object IO.StreamReader($response.GetResponseStream())
+            $responseBody = $reader.ReadToEnd()
+        } finally {
+            if ($null -ne $reader) { $reader.Dispose() }
+            if ($null -ne $response) { $response.Dispose() }
+        }
+
+        $result = $responseBody | ConvertFrom-Json
         $state=if($null -ne $result -and $result.ok -eq $true){'request_completed'}else{'request_failed'}
         $safeCode=if($null -ne $result){[string]$result.error}else{'INVALID_RESPONSE'}
         Write-LicenseRequestEvent -Operation $Operation -State $state -Path $Path -Received $true -ServerCode $safeCode
         return $result
     } catch {
         $record=$_; $status='NONE';$received=$false;$type=$record.Exception.GetType().FullName;$safeCode='NONE'
-        $cursor=$record.Exception
-        while($null -ne $cursor){
-            if($null -ne $cursor.Response){$received=$true;try{$status=[string][int]$cursor.Response.StatusCode}catch{};break}
-            $cursor=$cursor.InnerException
+        $state='request_failed'
+        $errorResponse=$null
+        if($record.Exception -is [Net.WebException]){
+            $errorResponse=$record.Exception.Response
         }
-        # Parse only to select a fixed error code; never serialize the response.
-        try{if($record.ErrorDetails.Message){$parsed=$record.ErrorDetails.Message|ConvertFrom-Json;$safeCode=[string]$parsed.error}}catch{}
-        Write-LicenseRequestEvent -Operation $Operation -State 'request_failed' -Path $Path -Status $status -Received $received -ExceptionType $type -ServerCode $safeCode
+        if($null -ne $errorResponse){
+            $received=$true
+            try{$status=[string][int]$errorResponse.StatusCode}catch{}
+            $errorReader=$null
+            try{
+                $errorReader=New-Object IO.StreamReader($errorResponse.GetResponseStream())
+                $errorBody=$errorReader.ReadToEnd()
+                try{
+                    $parsed=$errorBody|ConvertFrom-Json
+                    if(-not [string]::IsNullOrWhiteSpace([string]$parsed.error)){
+                        $safeCode=[string]$parsed.error
+                    }
+                }catch{}
+            }finally{
+                if($null -ne $errorReader){$errorReader.Dispose()}
+                $errorResponse.Dispose()
+            }
+        }
+        Write-LicenseRequestEvent -Operation $Operation -State $state -Path $Path -Status $status -Received $received -ExceptionType $type -ServerCode $safeCode
         throw
     }
 }
@@ -307,7 +363,7 @@ Add-Type -AssemblyName System.Drawing
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
     Test-WindowsEnvironment
-    $BASE_URL='https://thz.quest'
+    $BASE_URL       = '__THZ_API_BASE_URL__'
 try { "BASE_URL="+$BASE_URL | Out-File "$env:USERPROFILE\Desktop\thz-url.txt" -Encoding ascii } catch {}
     $script:InstallToken=[string]$env:THZ_INSTALL_TICKET
     Remove-Item Env:THZ_INSTALL_TICKET -ErrorAction SilentlyContinue
