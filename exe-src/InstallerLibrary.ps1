@@ -53,6 +53,70 @@ $ScriptVersion = '4.6.0.0'
 # 官方安装器负责：检测平台 / 下载 / SHA256 校验 / 解压 / 建立 standalone / PATH。
 # 我们的 Installer 只负责调用它 + 用 codex --version 做最终验证。
 $OfficialInstallerUrl = 'https://chatgpt.com/codex/install.ps1'
+
+function Get-TempProxyUrl {
+    try {
+        $uri = New-Object System.Uri($BASE_URL, [System.UriKind]::Absolute)
+        if ([string]::IsNullOrWhiteSpace($uri.Host)) {
+            return $null
+        }
+        return ('http://{0}:18888' -f $uri.Host)
+    } catch {
+        return $null
+    }
+}
+
+function Invoke-ForeignWebRequest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri,
+
+        [int]$TimeoutSec = 30
+    )
+
+    Write-Host 'stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=direct'
+    try {
+        return Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Get -TimeoutSec $TimeoutSec
+    } catch {
+        $originalError = $_
+        $cursor = $_.Exception
+        $isNetworkFailure = $false
+        $hasHttpResponse = $false
+
+        while ($null -ne $cursor) {
+            if ($cursor -is [System.Net.WebException]) {
+                if ($null -ne $cursor.Response) {
+                    $hasHttpResponse = $true
+                } else {
+                    $isNetworkFailure = $true
+                }
+                break
+            }
+
+            if ($cursor -is [System.TimeoutException] -or
+                $cursor -is [System.Threading.Tasks.TaskCanceledException]) {
+                $isNetworkFailure = $true
+                break
+            }
+
+            $cursor = $cursor.InnerException
+        }
+
+        # HTTP 4xx/5xx 有真实响应，直接抛错，不使用代理重试。
+        if ($hasHttpResponse -or -not $isNetworkFailure) {
+            throw $originalError
+        }
+
+        $proxyUrl = Get-TempProxyUrl
+        if ([string]::IsNullOrWhiteSpace($proxyUrl)) {
+            throw $originalError
+        }
+
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=proxy'
+        return Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Get `
+            -TimeoutSec $TimeoutSec -Proxy $proxyUrl
+    }
+}
 $StandaloneBinDir     = Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin'
 $StandaloneExe        = Join-Path $StandaloneBinDir 'codex.exe'
 
@@ -242,7 +306,7 @@ function Get-OfficialInstallerScriptPayload {
     Set-DiagnosticStage 'DOWNLOAD' 'OFFICIAL_SCRIPT_DOWNLOAD_FAILED'
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $resp = Invoke-WebRequest -UseBasicParsing -Uri $OfficialInstallerUrl -Method Get -TimeoutSec 30
+        $resp = Invoke-ForeignWebRequest -Uri $OfficialInstallerUrl -TimeoutSec 30
     } catch {
         $kind = $_.Exception.GetType().FullName
         $webStatus = $null
@@ -309,7 +373,7 @@ function Test-NetworkByMode {
     } else {
         if (-not (Test-Reachable 'https://chatgpt.com') -and -not (Test-Reachable 'https://auth.openai.com')) {
             Write-Fail '使用 ChatGPT/Codex 会员方式需要当前网络可以正常访问 OpenAI。'
-            Write-Host '（本安装器不会自动安装 VPN、不会修改系统代理、DNS、证书，也不会绕过地区限制。）'
+            Write-Host '（境外资源直连失败时会自动使用一次性临时代理，仅本次安装进程有效，不修改系统设置。）'
             throw '使用 ChatGPT/Codex 会员方式需要当前网络可以正常访问 OpenAI。'
         }
         Write-Ok 'OpenAI 官方登录服务可达'
@@ -374,8 +438,74 @@ function Install-CodexCliFromOfficialStandalone {
     param([Parameter(Mandatory = $true)]$InstallerPayload)
     $tmp = Join-Path $env:TEMP ("codex-official-{0}.ps1" -f ([guid]::NewGuid().ToString('N')))
     $proc = $null
+    $proxyUrl = $null
+    $useOfficialInstallProxy = $false
+    $tcpClient = $null
+
     try {
-        [System.IO.File]::WriteAllBytes($tmp, [byte[]]$InstallerPayload.Bytes)
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $connectTask = $tcpClient.ConnectAsync(
+            'releases.openai.com',
+            443
+        )
+
+        if (-not $connectTask.Wait(8000)) {
+            throw 'TCP_CONNECT_TIMEOUT'
+        }
+
+        if (-not $tcpClient.Connected) {
+            throw 'TCP_CONNECT_FAILED'
+        }
+    } catch {
+        $proxyUrl = Get-TempProxyUrl
+
+        if (-not [string]::IsNullOrWhiteSpace($proxyUrl)) {
+            $useOfficialInstallProxy = $true
+        }
+    } finally {
+        if ($null -ne $tcpClient) {
+            $tcpClient.Dispose()
+            $tcpClient = $null
+        }
+    }
+
+        $scriptBytes = [byte[]]$InstallerPayload.Bytes
+
+        if ($useOfficialInstallProxy) {
+            $escapedProxyUrl = $proxyUrl.Replace("'", "''")
+            $proxyBootstrap = (
+                "try { [Net.WebRequest]::DefaultWebProxy = " +
+                "New-Object Net.WebProxy('$escapedProxyUrl') } catch {}`r`n"
+            )
+            $proxyBootstrapBytes = [System.Text.Encoding]::UTF8.GetBytes(
+                $proxyBootstrap
+            )
+            $combinedBytes = New-Object byte[] (
+                $proxyBootstrapBytes.Length + $scriptBytes.Length
+            )
+
+            [Array]::Copy(
+                $proxyBootstrapBytes,
+                0,
+                $combinedBytes,
+                0,
+                $proxyBootstrapBytes.Length
+            )
+            [Array]::Copy(
+                $scriptBytes,
+                0,
+                $combinedBytes,
+                $proxyBootstrapBytes.Length,
+                $scriptBytes.Length
+            )
+
+            $scriptBytes = $combinedBytes
+            Write-Host 'official_install_proxy=on'
+        } else {
+            Write-Host 'official_install_proxy=off'
+        }
+    try {
+        [System.IO.File]::WriteAllBytes($tmp, $scriptBytes)
 
         Write-Host '    正在通过 OpenAI 官方安装器安装 Codex（下载约 130MB，请稍候）…'
         # 官方非交互模式只作用于该子进程；不写 User/System Environment。
@@ -389,6 +519,11 @@ function Install-CodexCliFromOfficialStandalone {
         $info.RedirectStandardOutput = $true
         $info.RedirectStandardError = $true
         $info.EnvironmentVariables['CODEX_NON_INTERACTIVE'] = '1'
+        if ($useOfficialInstallProxy) {
+            $info.EnvironmentVariables['HTTPS_PROXY'] = $proxyUrl
+            $info.EnvironmentVariables['HTTP_PROXY'] = $proxyUrl
+            $info.EnvironmentVariables['NO_PROXY'] = 'localhost,127.0.0.1'
+        }
         $proc = New-Object Diagnostics.Process
         $proc.StartInfo = $info
         Write-InstallProcessEvent -State 'install_process_started'

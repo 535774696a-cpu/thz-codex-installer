@@ -83,7 +83,7 @@ function Get-OfficialCodexDesktopPackage {
 }
 
 function Write-DesktopDownloadEvent {
-    param([int]$Attempt,[long]$ElapsedMs,[string]$Status='NONE',[long]$Expected=-1,[long]$Written=0,[string]$FailureStage='NONE',$ErrorRecord=$null)
+    param([int]$Attempt,[long]$ElapsedMs,[string]$Status='NONE',[long]$Expected=-1,[long]$Written=0,[string]$FailureStage='NONE',$ErrorRecord=$null,[string]$DownloadVia='direct')
     try {
         $parts=New-Object Collections.Generic.List[string];$cursor=if($null-ne $ErrorRecord){$ErrorRecord.Exception}else{$null};$depth=0
         while($null-ne $cursor -and $depth -lt 3){
@@ -91,13 +91,14 @@ function Write-DesktopDownloadEvent {
             $cursor=$cursor.InnerException;$depth++
         }
         if($Status -notmatch '^(NONE|[1-5][0-9][0-9])$'){$Status='NONE'}
-        $line=[DateTime]::UtcNow.ToString('o')+' stage=DOWNLOAD operation=DESKTOP_MSIX_DOWNLOAD download_attempt='+$Attempt+' download_elapsed_ms='+$ElapsedMs+' http_status='+$Status+' content_length_expected='+$Expected+' bytes_written='+$Written+' failure_stage='+$FailureStage+' exception_chain="'+(ConvertTo-SafeInstallSummary ($parts -join ' <- '))+'"'
+        $line=[DateTime]::UtcNow.ToString('o')+' stage=DOWNLOAD operation=DESKTOP_MSIX_DOWNLOAD download_attempt='+$Attempt+' download_elapsed_ms='+$ElapsedMs+' http_status='+$Status+' content_length_expected='+$Expected+' bytes_written='+$Written+' failure_stage='+$FailureStage+' exception_chain="'+(ConvertTo-SafeInstallSummary ($parts -join ' <- '))+'"' download_via='+$DownloadVia
         [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
     }catch{}
 }
 
 function Get-OfficialDesktopMsix {
     param([string]$Source,[string]$Destination)
+    $proxyUrl=Get-TempProxyUrl
     Add-Type -AssemblyName System.Net.Http
     $partial=$Destination+'.partial';$maxAttempts=3
     for($attempt=1;$attempt -le $maxAttempts;$attempt++){
@@ -105,7 +106,9 @@ function Get-OfficialDesktopMsix {
         $watch=[Diagnostics.Stopwatch]::StartNew();$status='NONE';$expected=[long]-1;$written=[long]0;$response=$null;$client=$null;$handler=$null
         try{
             Set-DiagnosticStage 'DOWNLOAD' 'DESKTOP_MSIX_DOWNLOAD_FAILED'
-            $handler=New-Object Net.Http.HttpClientHandler;$handler.AllowAutoRedirect=$true;$handler.MaxAutomaticRedirections=5
+            $handler=New-Object Net.Http.HttpClientHandler
+            if($attempt -gt 1 -and $proxyUrl){$handler.Proxy=New-Object Net.WebProxy($proxyUrl);$handler.UseProxy=$true}
+            $handler.AllowAutoRedirect=$true;$handler.MaxAutomaticRedirections=5
             $client=New-Object Net.Http.HttpClient($handler);$client.Timeout=[TimeSpan]::FromMinutes(15)
             $response=$client.GetAsync($Source,[Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
             $status=[string][int]$response.StatusCode
@@ -122,7 +125,7 @@ function Get-OfficialDesktopMsix {
             if($expected -ge 0 -and $written -ne $expected){throw 'DESKTOP_CONTENT_LENGTH_MISMATCH'}
             if($written -lt 50000000){throw 'DESKTOP_PACKAGE_TOO_SMALL'}
             Move-Item -LiteralPath $partial -Destination $Destination -Force
-            $watch.Stop();Write-DesktopDownloadEvent -Attempt $attempt -ElapsedMs $watch.ElapsedMilliseconds -Status $status -Expected $expected -Written $written
+            $watch.Stop();Write-DesktopDownloadEvent -Attempt $attempt -ElapsedMs $watch.ElapsedMilliseconds -Status $status -Expected $expected -Written $written -DownloadVia $(if($attempt -eq 1){'direct'}else{'proxy'})
             return
         }catch{
             $record=$_;$watch.Stop();Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
@@ -130,7 +133,7 @@ function Get-OfficialDesktopMsix {
             while($null-ne $cursor){if($cursor -is [Net.Http.HttpRequestException] -or $cursor -is [IO.IOException] -or $cursor -is [Net.WebException] -or $cursor -is [Threading.Tasks.TaskCanceledException]){$retryable=$true};$cursor=$cursor.InnerException}
             if($message -eq 'DESKTOP_DOWNLOAD_RETRYABLE_HTTP' -or $message -eq 'DESKTOP_CONTENT_LENGTH_MISMATCH'){$retryable=$true}
             if($message -in @('DESKTOP_SOURCE_INVALID','DESKTOP_DOWNLOAD_HTTP_REJECTED','DESKTOP_PACKAGE_TOO_SMALL')){$retryable=$false}
-            Write-DesktopDownloadEvent -Attempt $attempt -ElapsedMs $watch.ElapsedMilliseconds -Status $status -Expected $expected -Written $written -FailureStage 'STREAM_OR_TRANSPORT' -ErrorRecord $record
+            Write-DesktopDownloadEvent -Attempt $attempt -ElapsedMs $watch.ElapsedMilliseconds -Status $status -Expected $expected -Written $written -FailureStage 'STREAM_OR_TRANSPORT' -ErrorRecord $record -DownloadVia $(if($attempt -eq 1){'direct'}else{'proxy'})
             if(-not $retryable -or $attempt -ge $maxAttempts){throw 'DESKTOP_MSIX_DOWNLOAD_FAILED'}
             Start-Sleep -Seconds $attempt
         }finally{if($null-ne $response){$response.Dispose()};if($null-ne $client){$client.Dispose()};if($null-ne $handler){$handler.Dispose()}}
