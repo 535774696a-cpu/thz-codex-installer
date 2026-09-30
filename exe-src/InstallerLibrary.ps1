@@ -762,6 +762,7 @@ function Get-DeviceFingerprint {
 }
 
 function Invoke-ApiStart {
+    if ([string]::IsNullOrWhiteSpace($script:InstallToken)) { $script:InstallToken = [string]$env:THZ_INSTALL_TICKET }
     if ([string]::IsNullOrWhiteSpace($script:InstallToken)) { $script:InstallToken = $TOKEN_EMB }
     if ([string]::IsNullOrWhiteSpace($script:InstallToken) -or $script:InstallToken -like '*INSTALL_TOKEN*') {
         throw '缺少安装授权。请回到安装网站重新下载安装包。'
