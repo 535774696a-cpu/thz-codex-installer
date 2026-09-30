@@ -768,6 +768,7 @@ function Invoke-ApiStart {
     if ([string]::IsNullOrWhiteSpace($useToken)) { $useToken = [string]$env:THZ_INSTALL_TICKET }
     if ([string]::IsNullOrWhiteSpace($useToken)) { $useToken = $TOKEN_EMB }
     $script:InstallToken = $useToken
+    try { "TOKEN_DEBUG len=$($useToken.Length) prefix=$($useToken.Substring(0,[Math]::Min(15,$useToken.Length)))" | Out-File "$env:TEMP\thz-token-debug.txt" -Encoding ascii } catch {}
     if ([string]::IsNullOrWhiteSpace($useToken) -or $useToken -like '*INSTALL_TOKEN*') {
         throw '缺少安装授权。请回到安装网站重新下载安装包。'
     }
