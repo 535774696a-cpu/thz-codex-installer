@@ -91,7 +91,7 @@ function Write-DesktopDownloadEvent {
             $cursor=$cursor.InnerException;$depth++
         }
         if($Status -notmatch '^(NONE|[1-5][0-9][0-9])$'){$Status='NONE'}
-        $line=[DateTime]::UtcNow.ToString('o')+' stage=DOWNLOAD operation=DESKTOP_MSIX_DOWNLOAD download_attempt='+$Attempt+' download_elapsed_ms='+$ElapsedMs+' http_status='+$Status+' content_length_expected='+$Expected+' bytes_written='+$Written+' failure_stage='+$FailureStage+' exception_chain="'+(ConvertTo-SafeInstallSummary ($parts -join ' <- '))+'"' download_via='+$DownloadVia
+        $line=[DateTime]::UtcNow.ToString('o')+' stage=DOWNLOAD operation=DESKTOP_MSIX_DOWNLOAD download_attempt='+$Attempt+' download_elapsed_ms='+$ElapsedMs+' http_status='+$Status+' content_length_expected='+$Expected+' bytes_written='+$Written+' failure_stage='+$FailureStage+' exception_chain="'+(ConvertTo-SafeInstallSummary ($parts -join ' <- '))+'" download_via='+$DownloadVia
         [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
     }catch{}
 }
