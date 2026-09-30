@@ -22,7 +22,16 @@ public static partial class Bootstrap {
   Log("START",null);
  }
  static void Log(string result,Exception error){
+  if(result=="PASS")errorCode="NONE";
   try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.0.0 windows="+Environment.OSVersion.Version+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
+ }
+ static void LogDetail(string code,string candidate,Exception error){
+  try{
+   string msg=error==null?"NONE":(error.GetType().FullName+": "+(error.Message??"")).Replace("\r"," ").Replace("\n"," ");
+   if(msg.Length>600)msg=msg.Substring(0,600);
+   string cand=(candidate??"NONE").Replace("\r"," ").Replace("\n"," ");
+   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.0.0 windows="+Environment.OSVersion.Version+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
+  }catch{}
  }
  static void Stage(string value,string code){stage=value;errorCode=code;Log("PENDING",null);}
  static string Failure(Exception error){
@@ -149,11 +158,41 @@ public static partial class Bootstrap {
  }
  static void Extract() {
   Stage("EXTRACT","WORKSPACE_CREATE_FAILED");
-  workspace=Path.Combine(Path.GetTempPath(),"THZ-Codex-Setup-"+Guid.NewGuid().ToString("N"));
+  string[] bases=new string[]{
+   Path.GetTempPath(),
+   Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"THZ","Workspace"),
+   Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".thz-workspace")
+  };
+  string created=null;
+  foreach(string b in bases){
+   if(String.IsNullOrWhiteSpace(b))continue;
+   string candidate=null;
+   try{
+    Directory.CreateDirectory(b);
+    candidate=Path.Combine(b,"THZ-Codex-Setup-"+Guid.NewGuid().ToString("N"));
+    if(CiTest)Console.WriteLine("THZ_CI_WORKSPACE_TRY="+candidate);
+    if(Directory.Exists(candidate))throw new InvalidOperationException("WORKSPACE_EXISTS");
+    try{
+     var acl=new DirectorySecurity();
+     acl.SetAccessRuleProtection(true,false);
+     var user=WindowsIdentity.GetCurrent().User;
+     if(user==null)throw new InvalidOperationException("WORKSPACE_IDENTITY_UNKNOWN");
+     acl.AddAccessRule(new FileSystemAccessRule(user,FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
+     Directory.CreateDirectory(candidate,acl);
+    }catch(Exception aclError){
+     LogDetail("WORKSPACE_ACL_FALLBACK",candidate,aclError);
+     Directory.CreateDirectory(candidate);
+    }
+    created=candidate;
+    break;
+   }catch(Exception e){
+    LogDetail("WORKSPACE_BASE_FAILED",candidate??b,e);
+   }
+  }
+  if(created==null)throw new InvalidOperationException("WORKSPACE_CREATE_FAILED");
+  workspace=created;
   if(CiTest)Console.WriteLine("THZ_CI_WORKSPACE="+workspace);
-  if(Directory.Exists(workspace))throw new InvalidOperationException("WORKSPACE_EXISTS");
-  var acl=new DirectorySecurity();acl.SetAccessRuleProtection(true,false);acl.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User,FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
-  Directory.CreateDirectory(workspace,acl);Log("PASS",null);
+  Log("PASS",null);
   ExtractResources();
   temp=Path.Combine(workspace,"download-temp");Directory.CreateDirectory(temp);
   Stage("EXTRACT","MANIFEST_WRITE_FAILED");Manifest(false);
