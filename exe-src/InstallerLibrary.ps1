@@ -762,9 +762,13 @@ function Get-DeviceFingerprint {
 }
 
 function Invoke-ApiStart {
-    if ([string]::IsNullOrWhiteSpace($script:InstallToken)) { $script:InstallToken = [string]$env:THZ_INSTALL_TICKET }
-    if ([string]::IsNullOrWhiteSpace($script:InstallToken)) { $script:InstallToken = $TOKEN_EMB }
-    if ([string]::IsNullOrWhiteSpace($script:InstallToken) -or $script:InstallToken -like '*INSTALL_TOKEN*') {
+    param([string]$Token = '')
+    $useToken = $Token
+    if ([string]::IsNullOrWhiteSpace($useToken)) { $useToken = $script:InstallToken }
+    if ([string]::IsNullOrWhiteSpace($useToken)) { $useToken = [string]$env:THZ_INSTALL_TICKET }
+    if ([string]::IsNullOrWhiteSpace($useToken)) { $useToken = $TOKEN_EMB }
+    $script:InstallToken = $useToken
+    if ([string]::IsNullOrWhiteSpace($useToken) -or $useToken -like '*INSTALL_TOKEN*') {
         throw '缺少安装授权。请回到安装网站重新下载安装包。'
     }
     if ($BASE_URL -like '*BASE_URL*') {
@@ -772,7 +776,7 @@ function Invoke-ApiStart {
     }
     $deviceFingerprint = Get-DeviceFingerprint
     $body = @{
-        install_token = $InstallToken
+        install_token = $useToken;
         device_fingerprint = $deviceFingerprint
         installer_version = $ScriptVersion
         os_type = 'windows'

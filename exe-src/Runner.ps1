@@ -312,7 +312,7 @@ Add-Type -AssemblyName System.Drawing
     Remove-Item Env:THZ_INSTALL_TICKET -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($script:InstallToken) -or $script:InstallToken -notmatch '^[A-Za-z0-9_-]{32,128}$') { throw 'INSTALLATION_TICKET_INVALID' }
     Set-DiagnosticStage 'LICENSE_START' 'LICENSE_START_FAILED'
-    $cfg=Invoke-ApiStart
+    $cfg=Invoke-ApiStart -Token $script:InstallToken
     if ($cfg.client_type -notin @('cli','desktop') -or $cfg.provider_type -notin @('deepseek','chatgpt') -or $cfg.mode -ne $cfg.provider_type) { throw 'INSTALL_PLAN_MISMATCH' }
     if (($cfg.provider_type -eq 'deepseek' -and $cfg.route -ne 'A') -or ($cfg.provider_type -eq 'chatgpt' -and $cfg.route -ne 'C')) { throw 'INSTALL_PLAN_MISMATCH' }
     Set-DiagnosticStage 'PREFLIGHT' 'NETWORK_OR_ENVIRONMENT_FAILED'
