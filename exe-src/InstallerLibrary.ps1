@@ -762,8 +762,8 @@ function Get-DeviceFingerprint {
 }
 
 function Invoke-ApiStart {
-    if ([string]::IsNullOrWhiteSpace($InstallToken)) { $InstallToken = $TOKEN_EMB }
-    if ([string]::IsNullOrWhiteSpace($InstallToken) -or $InstallToken -like '*INSTALL_TOKEN*') {
+    if ([string]::IsNullOrWhiteSpace($script:InstallToken)) { $script:InstallToken = $TOKEN_EMB }
+    if ([string]::IsNullOrWhiteSpace($script:InstallToken) -or $script:InstallToken -like '*INSTALL_TOKEN*') {
         throw '缺少安装授权。请回到安装网站重新下载安装包。'
     }
     if ($BASE_URL -like '*BASE_URL*') {
@@ -791,7 +791,7 @@ function Invoke-ApiStart {
 }
 
 function Invoke-ApiComplete {
-    $body = @{ install_token = $InstallToken; device_fingerprint = (Get-DeviceFingerprint) } | ConvertTo-Json
+    $body = @{ install_token = $script:InstallToken; device_fingerprint = (Get-DeviceFingerprint) } | ConvertTo-Json
     try {
         $null = Invoke-LicenseRequest -Operation 'LICENSE_COMPLETE' -Path '/api/installer/complete' -Body $body -TimeoutSec 20
     } catch {
