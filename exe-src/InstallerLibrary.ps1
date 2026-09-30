@@ -54,19 +54,583 @@ $ScriptVersion = '4.6.0.0'
 # 我们的 Installer 只负责调用它 + 用 codex --version 做最终验证。
 $OfficialInstallerUrl = 'https://chatgpt.com/codex/install.ps1'
 
-function Get-TempProxyUrl {
+# ---- 内置代理 (sing-box + hysteria2) ----
+
+function Get-EmbeddedProxySubscription {
+    [CmdletBinding()]
+    param()
+
     try {
-        $uri = New-Object System.Uri($BASE_URL, [System.UriKind]::Absolute)
-        if ([string]::IsNullOrWhiteSpace($uri.Host)) {
-            return $null
+        $encodedToken = [Uri]::EscapeDataString([string]$script:InstallToken)
+        $subscriptionUri = '{0}/api/installer/proxy-sub?install_token={1}' -f $BASE_URL.TrimEnd('/'), $encodedToken
+
+        Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY subscription_fetch=start'
+
+        $response = Invoke-WebRequest `
+            -Uri $subscriptionUri `
+            -UseBasicParsing `
+            -TimeoutSec 30 `
+            -ErrorAction Stop
+
+        if ([string]::IsNullOrWhiteSpace([string]$response.Content)) {
+            throw '服务端返回了空的代理订阅。'
         }
-        return ('http://{0}:18888' -f $uri.Host)
-    } catch {
-        return $null
+
+        Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY subscription_fetch=success'
+        return [string]$response.Content
+    }
+    catch {
+        throw ('获取内置代理订阅失败：{0}' -f $_.Exception.Message)
     }
 }
 
+function ConvertFrom-Hysteria2Uri {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Uri
+    )
+
+    try {
+        $trimmedUri = $Uri.Trim()
+
+        if (-not $trimmedUri.StartsWith('hysteria2://', [StringComparison]::OrdinalIgnoreCase)) {
+            throw '节点地址不是有效的 hysteria2 URI。'
+        }
+
+        $parsedUri = New-Object System.Uri($trimmedUri)
+
+        if ($parsedUri.Scheme -ne 'hysteria2') {
+            throw '节点协议不是 hysteria2。'
+        }
+
+        if ([string]::IsNullOrWhiteSpace($parsedUri.Host)) {
+            throw '节点地址缺少服务器主机名。'
+        }
+
+        if ($parsedUri.Port -le 0 -or $parsedUri.Port -gt 65535) {
+            throw '节点地址中的端口无效。'
+        }
+
+        $password = [Uri]::UnescapeDataString([string]$parsedUri.UserInfo)
+        $server = [Uri]::UnescapeDataString([string]$parsedUri.Host)
+        $name = [Uri]::UnescapeDataString([string]$parsedUri.Fragment.TrimStart('#'))
+
+        $queryValues = @{}
+        $query = [string]$parsedUri.Query
+
+        if (-not [string]::IsNullOrWhiteSpace($query)) {
+            foreach ($item in $query.TrimStart('?').Split('&')) {
+                if ([string]::IsNullOrWhiteSpace($item)) {
+                    continue
+                }
+
+                $parts = $item.Split('=', 2)
+                $key = [Uri]::UnescapeDataString($parts[0]).ToLowerInvariant()
+                $value = ''
+
+                if ($parts.Count -gt 1) {
+                    $value = [Uri]::UnescapeDataString($parts[1])
+                }
+
+                $queryValues[$key] = $value
+            }
+        }
+
+        $sni = $server
+        if ($queryValues.ContainsKey('sni') -and
+            -not [string]::IsNullOrWhiteSpace([string]$queryValues['sni'])) {
+            $sni = [string]$queryValues['sni']
+        }
+
+        $insecure = $false
+        if ($queryValues.ContainsKey('insecure')) {
+            $insecureValue = ([string]$queryValues['insecure']).Trim().ToLowerInvariant()
+            $insecure = (
+                $insecureValue -eq '1' -or
+                $insecureValue -eq 'true' -or
+                $insecureValue -eq 'yes'
+            )
+        }
+
+        $obfsType = ''
+        if ($queryValues.ContainsKey('obfs')) {
+            $obfsType = [string]$queryValues['obfs']
+        }
+
+        $obfsPassword = ''
+        if ($queryValues.ContainsKey('obfs-password')) {
+            $obfsPassword = [string]$queryValues['obfs-password']
+        }
+
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            $name = '{0}:{1}' -f $server, $parsedUri.Port
+        }
+
+        return [PSCustomObject]@{
+            Server       = $server
+            ServerPort   = [int]$parsedUri.Port
+            Password     = $password
+            Sni          = $sni
+            Insecure     = [bool]$insecure
+            ObfsType     = $obfsType
+            ObfsPassword = $obfsPassword
+            Name         = $name
+        }
+    }
+    catch {
+        throw ('解析 hysteria2 节点失败：{0}' -f $_.Exception.Message)
+    }
+}
+
+function Test-ProxyNodeLatency {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [Alias('Host')]
+        [string]$TargetHost,
+
+        [Parameter(Mandatory = $true)]
+        [int]$Port,
+
+        [int]$TimeoutMs = 3000
+    )
+
+    $tcpClient = $null
+
+    try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+        $asyncResult = $tcpClient.BeginConnect($TargetHost, $Port, $null, $null)
+
+        if (-not $asyncResult.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
+            return $null
+        }
+
+        $tcpClient.EndConnect($asyncResult)
+        $stopwatch.Stop()
+
+        if (-not $tcpClient.Connected) {
+            return $null
+        }
+
+        return [int][Math]::Max(1, $stopwatch.ElapsedMilliseconds)
+    }
+    catch {
+        return $null
+    }
+    finally {
+        if ($null -ne $tcpClient) {
+            $tcpClient.Close()
+            $tcpClient.Dispose()
+        }
+    }
+}
+
+function Start-EmbeddedProxy {
+    [CmdletBinding()]
+    param()
+
+    if ($null -ne $script:EmbeddedProxyProcess) {
+        try {
+            if (-not $script:EmbeddedProxyProcess.HasExited -and
+                -not [string]::IsNullOrWhiteSpace([string]$script:EmbeddedProxyUrl)) {
+                Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_status=already_running'
+                return $script:EmbeddedProxyUrl
+            }
+        }
+        catch {
+            $script:EmbeddedProxyProcess = $null
+            $script:EmbeddedProxyUrl = $null
+        }
+    }
+
+    $proxyDirectory = Join-Path $env:TEMP 'THZ-singbox'
+    $singBoxPath = Join-Path $proxyDirectory 'sing-box.exe'
+    $configPath = Join-Path $proxyDirectory 'config.json'
+    $stdoutLogPath = Join-Path $proxyDirectory 'sing-box.stdout.log'
+    $stderrLogPath = Join-Path $proxyDirectory 'sing-box.stderr.log'
+    $minimumCachedSize = 10MB
+
+    try {
+        if (-not (Test-Path -LiteralPath $proxyDirectory)) {
+            New-Item -ItemType Directory -Path $proxyDirectory -Force -ErrorAction Stop | Out-Null
+        }
+
+        $downloadSingBox = $true
+        if (Test-Path -LiteralPath $singBoxPath -PathType Leaf) {
+            $existingFile = Get-Item -LiteralPath $singBoxPath -ErrorAction Stop
+            if ($existingFile.Length -gt $minimumCachedSize) {
+                $downloadSingBox = $false
+                Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY binary_cache=hit'
+            }
+        }
+
+        if ($downloadSingBox) {
+            $singBoxUri = '{0}/static/sing-box.exe' -f $BASE_URL.TrimEnd('/')
+            $temporaryBinaryPath = Join-Path $proxyDirectory 'sing-box.exe.download'
+
+            Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY binary_download=start'
+
+            Invoke-WebRequest `
+                -Uri $singBoxUri `
+                -OutFile $temporaryBinaryPath `
+                -UseBasicParsing `
+                -TimeoutSec 120 `
+                -ErrorAction Stop
+
+            $downloadedFile = Get-Item -LiteralPath $temporaryBinaryPath -ErrorAction Stop
+            if ($downloadedFile.Length -le $minimumCachedSize) {
+                Remove-Item -LiteralPath $temporaryBinaryPath -Force -ErrorAction SilentlyContinue
+                throw '下载的 sing-box 程序文件不完整。'
+            }
+
+            Move-Item `
+                -LiteralPath $temporaryBinaryPath `
+                -Destination $singBoxPath `
+                -Force `
+                -ErrorAction Stop
+
+            Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY binary_download=success'
+        }
+
+        $subscription = Get-EmbeddedProxySubscription
+
+        try {
+            $base64Text = ($subscription -replace '\s', '')
+            $subscriptionBytes = [Convert]::FromBase64String($base64Text)
+            $decodedSubscription = [Text.Encoding]::UTF8.GetString($subscriptionBytes)
+        }
+        catch {
+            throw ('代理订阅的 Base64 内容无效：{0}' -f $_.Exception.Message)
+        }
+
+        $nodes = New-Object System.Collections.Generic.List[object]
+
+        foreach ($line in ($decodedSubscription -split '\r?\n')) {
+            $nodeUri = $line.Trim()
+            if ([string]::IsNullOrWhiteSpace($nodeUri)) {
+                continue
+            }
+
+            if (-not $nodeUri.StartsWith('hysteria2://', [StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+
+            try {
+                $nodes.Add((ConvertFrom-Hysteria2Uri -Uri $nodeUri))
+            }
+            catch {
+                Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY node_parse=failed'
+            }
+        }
+
+        if ($nodes.Count -eq 0) {
+            throw '代理订阅中没有可用的 hysteria2 节点。'
+        }
+
+        Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY latency_test=start total_nodes={0}' -f $nodes.Count)
+
+        $runspacePool = $null
+        $latencyTasks = New-Object System.Collections.Generic.List[object]
+        $latencyResults = New-Object System.Collections.Generic.List[object]
+
+        try {
+            $maximumConcurrency = [Math]::Min(20, $nodes.Count)
+            $runspacePool = [RunspaceFactory]::CreateRunspacePool(1, $maximumConcurrency)
+            $runspacePool.Open()
+
+            $latencyScript = {
+                param(
+                    [int]$Index,
+                    [string]$TargetHost,
+                    [int]$TargetPort,
+                    [int]$TimeoutMs
+                )
+
+                $client = $null
+
+                try {
+                    $client = New-Object System.Net.Sockets.TcpClient
+                    $watch = [Diagnostics.Stopwatch]::StartNew()
+                    $result = $client.BeginConnect($TargetHost, $TargetPort, $null, $null)
+
+                    if (-not $result.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
+                        return [PSCustomObject]@{
+                            Index   = $Index
+                            Latency = $null
+                        }
+                    }
+
+                    $client.EndConnect($result)
+                    $watch.Stop()
+
+                    if (-not $client.Connected) {
+                        return [PSCustomObject]@{
+                            Index   = $Index
+                            Latency = $null
+                        }
+                    }
+
+                    return [PSCustomObject]@{
+                        Index   = $Index
+                        Latency = [int][Math]::Max(1, $watch.ElapsedMilliseconds)
+                    }
+                }
+                catch {
+                    return [PSCustomObject]@{
+                        Index   = $Index
+                        Latency = $null
+                    }
+                }
+                finally {
+                    if ($null -ne $client) {
+                        $client.Close()
+                        $client.Dispose()
+                    }
+                }
+            }
+
+            for ($index = 0; $index -lt $nodes.Count; $index++) {
+                $node = $nodes[$index]
+                $powerShell = [PowerShell]::Create()
+                $powerShell.RunspacePool = $runspacePool
+
+                [void]$powerShell.AddScript($latencyScript)
+                [void]$powerShell.AddArgument($index)
+                [void]$powerShell.AddArgument([string]$node.Server)
+                [void]$powerShell.AddArgument([int]$node.ServerPort)
+                [void]$powerShell.AddArgument(3000)
+
+                $latencyTasks.Add([PSCustomObject]@{
+                    PowerShell = $powerShell
+                    Handle     = $powerShell.BeginInvoke()
+                })
+            }
+
+            foreach ($task in $latencyTasks) {
+                try {
+                    foreach ($result in $task.PowerShell.EndInvoke($task.Handle)) {
+                        if ($null -ne $result.Latency) {
+                            $latencyResults.Add($result)
+                        }
+                    }
+                }
+                finally {
+                    $task.PowerShell.Dispose()
+                }
+            }
+        }
+        finally {
+            foreach ($task in $latencyTasks) {
+                if ($null -ne $task.PowerShell) {
+                    try {
+                        $task.PowerShell.Dispose()
+                    }
+                    catch {
+                    }
+                }
+            }
+
+            if ($null -ne $runspacePool) {
+                $runspacePool.Close()
+                $runspacePool.Dispose()
+            }
+        }
+
+        if ($latencyResults.Count -eq 0) {
+            throw '所有内置代理节点均无法连接，请检查网络后重试。'
+        }
+
+        $bestResult = $latencyResults |
+            Sort-Object -Property @{ Expression = { [int]$_.Latency } } |
+            Select-Object -First 1
+
+        $selectedNode = $nodes[[int]$bestResult.Index]
+
+        Write-Host (
+            'stage=DOWNLOAD operation=EMBEDDED_PROXY node_selected={0} latency_ms={1} total_nodes={2}' -f
+            (($selectedNode.Name -replace '\s+', '_') -replace '=', '_'),
+            [int]$bestResult.Latency,
+            $nodes.Count
+        )
+
+        $listenPort = $null
+        for ($attempt = 0; $attempt -lt 100; $attempt++) {
+            $candidatePort = Get-Random -Minimum 18000 -Maximum 19000
+            $listener = $null
+
+            try {
+                $listener = New-Object System.Net.Sockets.TcpListener(
+                    [Net.IPAddress]::Loopback,
+                    $candidatePort
+                )
+                $listener.Start()
+                $listenPort = $candidatePort
+                break
+            }
+            catch {
+            }
+            finally {
+                if ($null -ne $listener) {
+                    try {
+                        $listener.Stop()
+                    }
+                    catch {
+                    }
+                }
+            }
+        }
+
+        if ($null -eq $listenPort) {
+            throw '无法为内置代理分配本地监听端口。'
+        }
+
+        $tlsConfig = [ordered]@{
+            enabled     = $true
+            server_name = [string]$selectedNode.Sni
+            insecure    = [bool]$selectedNode.Insecure
+        }
+
+        $outboundConfig = [ordered]@{
+            type        = 'hysteria2'
+            tag         = 'proxy'
+            server      = [string]$selectedNode.Server
+            server_port = [int]$selectedNode.ServerPort
+            password    = [string]$selectedNode.Password
+            tls         = $tlsConfig
+        }
+
+        if ($selectedNode.ObfsType -eq 'salamander') {
+            $outboundConfig['obfs'] = [ordered]@{
+                type     = 'salamander'
+                password = [string]$selectedNode.ObfsPassword
+            }
+        }
+
+        $singBoxConfig = [ordered]@{
+            log = [ordered]@{
+                level = 'warning'
+            }
+            inbounds = @(
+                [ordered]@{
+                    type        = 'mixed'
+                    tag         = 'mixed-in'
+                    listen      = '127.0.0.1'
+                    listen_port = [int]$listenPort
+                }
+            )
+            outbounds = @($outboundConfig)
+        }
+
+        $configJson = $singBoxConfig | ConvertTo-Json -Depth 10
+        [IO.File]::WriteAllText(
+            $configPath,
+            $configJson,
+            (New-Object Text.UTF8Encoding($false))
+        )
+
+        Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_start=begin listen_port={0}' -f $listenPort)
+
+        $process = Start-Process `
+            -FilePath $singBoxPath `
+            -ArgumentList @('run', '-c', $configPath) `
+            -WorkingDirectory $proxyDirectory `
+            -NoNewWindow `
+            -RedirectStandardOutput $stdoutLogPath `
+            -RedirectStandardError $stderrLogPath `
+            -PassThru `
+            -ErrorAction Stop
+
+        $script:EmbeddedProxyProcess = $process
+        $proxyReady = $false
+        $deadline = [DateTime]::UtcNow.AddSeconds(15)
+
+        while ([DateTime]::UtcNow -lt $deadline) {
+            $process.Refresh()
+
+            if ($process.HasExited) {
+                break
+            }
+
+            $probe = Test-ProxyNodeLatency `
+                -TargetHost '127.0.0.1' `
+                -Port $listenPort `
+                -TimeoutMs 500
+
+            if ($null -ne $probe) {
+                $proxyReady = $true
+                break
+            }
+
+            Start-Sleep -Milliseconds 500
+        }
+
+        if (-not $proxyReady) {
+            try {
+                if (-not $process.HasExited) {
+                    $process.Kill()
+                }
+            }
+            catch {
+            }
+
+            $script:EmbeddedProxyProcess = $null
+            $script:EmbeddedProxyUrl = $null
+            throw '内置代理启动超时，请查看 sing-box 日志。'
+        }
+
+        $script:EmbeddedProxyUrl = 'http://127.0.0.1:{0}' -f $listenPort
+
+        Write-Host (
+            'stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_start=success proxy_url={0}' -f
+            $script:EmbeddedProxyUrl
+        )
+
+        return $script:EmbeddedProxyUrl
+    }
+    catch {
+        if ($null -ne $script:EmbeddedProxyProcess) {
+            try {
+                if (-not $script:EmbeddedProxyProcess.HasExited) {
+                    $script:EmbeddedProxyProcess.Kill()
+                }
+            }
+            catch {
+            }
+        }
+
+        $script:EmbeddedProxyProcess = $null
+        $script:EmbeddedProxyUrl = $null
+        throw ('启动内置代理失败：{0}' -f $_.Exception.Message)
+    }
+}
+
+function Stop-EmbeddedProxy {
+    [CmdletBinding()]
+    param()
+
+    if ($null -ne $script:EmbeddedProxyProcess) {
+        try {
+            if (-not $script:EmbeddedProxyProcess.HasExited) {
+                $script:EmbeddedProxyProcess.Kill()
+                $script:EmbeddedProxyProcess.WaitForExit(5000) | Out-Null
+            }
+        }
+        catch {
+            throw ('停止内置代理失败：{0}' -f $_.Exception.Message)
+        }
+        finally {
+            $script:EmbeddedProxyProcess = $null
+            $script:EmbeddedProxyUrl = $null
+        }
+    }
+
+    Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_stopped=true'
+}
+
 function Invoke-ForeignWebRequest {
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [string]$Uri,
@@ -74,74 +638,61 @@ function Invoke-ForeignWebRequest {
         [int]$TimeoutSec = 30
     )
 
-    Write-Host 'stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=direct'
     try {
-        return Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Get -TimeoutSec $TimeoutSec
-    } catch {
-        $originalError = $_
-        $cursor = $_.Exception
-        $isNetworkFailure = $false
-        $hasHttpResponse = $false
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=direct'
 
-        while ($null -ne $cursor) {
-            if ($cursor -is [System.Net.WebException]) {
-                if ($null -ne $cursor.Response) {
-                    $hasHttpResponse = $true
-                } else {
-                    $isNetworkFailure = $true
-                }
-                break
-            }
+        return Invoke-WebRequest `
+            -Uri $Uri `
+            -UseBasicParsing `
+            -TimeoutSec $TimeoutSec `
+            -ErrorAction Stop
+    }
+    catch {
+        $directError = $_.Exception.Message
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=direct result=failed'
+    }
 
-            if ($cursor -is [System.TimeoutException] -or
-                $cursor -is [System.Threading.Tasks.TaskCanceledException]) {
-                $isNetworkFailure = $true
-                break
-            }
+    try {
+        $embeddedProxyUrl = Start-EmbeddedProxy
 
-            $cursor = $cursor.InnerException
-        }
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=embedded_proxy'
 
-        # HTTP 4xx/5xx 有真实响应，直接抛错，不使用代理重试。
-        if ($hasHttpResponse -or -not $isNetworkFailure) {
-            throw $originalError
-        }
+        return Invoke-WebRequest `
+            -Uri $Uri `
+            -Proxy $embeddedProxyUrl `
+            -UseBasicParsing `
+            -TimeoutSec $TimeoutSec `
+            -ErrorAction Stop
+    }
+    catch {
+        $embeddedProxyError = $_.Exception.Message
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=embedded_proxy result=failed'
+    }
 
-        $proxyUrl = Get-TempProxyUrl
-        if ([string]::IsNullOrWhiteSpace($proxyUrl)) {
-            throw $originalError
-        }
+    try {
+        $baseServerUri = New-Object System.Uri($BASE_URL)
+        $legacyProxyUrl = 'http://{0}:18888' -f $baseServerUri.Host
 
-        Write-Host 'stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=proxy'
-        try {
-            return Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Get `
-                -TimeoutSec $TimeoutSec -Proxy $proxyUrl
-        } catch {
-            $pe = $_
-            $pType = $pe.Exception.GetType().FullName
-            $pWebStatus = 'NONE'
-            $pHttpStatus = 'NONE'
-            $pc = $pe.Exception
-            while ($null -ne $pc) {
-                if ($pc -is [System.Net.WebException]) {
-                    $pWebStatus = [string]$pc.Status
-                    try {
-                        if ($null -ne $pc.Response -and $null -ne $pc.Response.StatusCode) {
-                            $pHttpStatus = [int]$pc.Response.StatusCode
-                        }
-                    } catch {}
-                    break
-                }
-                $pc = $pc.InnerException
-            }
-            $pMsg = [string]$pe.Exception.Message
-            $pMsg = $pMsg -replace "`r`n", ' ' -replace "`n", ' ' -replace "`r", ' '
-            if ($pMsg.Length -gt 200) { $pMsg = $pMsg.Substring(0, 200) }
-            $pHost = 'UNKNOWN'
-            try { $pHost = ([Uri]$proxyUrl).Authority } catch {}
-            Write-Host ("stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=proxy_failed proxy_url={0} exception_type={1} web_status={2} http_status={3} message={4}" -f $pHost, $pType, $pWebStatus, $pHttpStatus, $pMsg)
-            throw
-        }
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=legacy_proxy'
+
+        return Invoke-WebRequest `
+            -Uri $Uri `
+            -Proxy $legacyProxyUrl `
+            -UseBasicParsing `
+            -TimeoutSec $TimeoutSec `
+            -ErrorAction Stop
+    }
+    catch {
+        $legacyProxyError = $_.Exception.Message
+
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=proxy_failed'
+
+        throw (
+            '境外资源下载失败。直连错误：{0}；内置代理错误：{1}；备用代理错误：{2}' -f
+            $directError,
+            $embeddedProxyError,
+            $legacyProxyError
+        )
     }
 }
 $StandaloneBinDir     = Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin'
@@ -331,12 +882,9 @@ function Test-DeepSeekApiWithKey {
 
 function Get-OfficialInstallerScriptPayload {
     Set-DiagnosticStage 'DOWNLOAD' 'OFFICIAL_SCRIPT_DOWNLOAD_FAILED'
-    # 自有服务器直连下载（国内可达，无需代理）
-    $OfficialInstallerUrl = ($BASE_URL.TrimEnd('/') + '/static/codex-install.ps1')
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        Write-Host 'stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=direct'
-        $resp = Invoke-WebRequest -UseBasicParsing -Uri $OfficialInstallerUrl -Method Get -TimeoutSec 30
+        $resp = Invoke-ForeignWebRequest -Uri $OfficialInstallerUrl -TimeoutSec 30
     } catch {
         $kind = $_.Exception.GetType().FullName
         $webStatus = $null
@@ -362,9 +910,7 @@ function Get-OfficialInstallerScriptPayload {
     try { $finalUrl = $resp.BaseResponse.ResponseUri.AbsoluteUri } catch {}
     $finalUri = $null
     try { $finalUri = [Uri]$finalUrl } catch {}
-    $selfHost = ''
-    try { $selfHost = ([Uri]$BASE_URL).Host.ToLowerInvariant() } catch {}
-    $allowedFinalHosts = @('chatgpt.com', 'releases.openai.com', $selfHost)
+    $allowedFinalHosts = @('chatgpt.com', 'releases.openai.com')
     if ($statusCode -lt 200 -or $statusCode -ge 300) {
         throw ("OpenAI 官方 Codex 安装程序返回异常状态（HTTP {0}，最终地址：{1}）。" -f $statusCode, $finalUrl)
     }

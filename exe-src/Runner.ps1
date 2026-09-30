@@ -366,6 +366,7 @@ Add-Type -AssemblyName System.Drawing
     $proof.Save((Join-Path $PSScriptRoot 'verification.xml'))
     Invoke-ApiComplete
     Write-SafeDiagnostic 'PASS' 'NONE' '0'
+    try { Stop-EmbeddedProxy } catch { }
     Stop-InstallTranscript
     exit 0
 } catch {
@@ -379,6 +380,7 @@ Add-Type -AssemblyName System.Drawing
     # P0-1: 停止 transcript（落盘前脱敏），把 transcript 路径写入 C# 侧持久诊断日志
     # （C# 启动器丢弃了子进程 stdout，Write-Host 只服务于直接运行 PS1 的场景；
     # 持久化可发现性靠下面这行诊断日志桥接）。
+    try { Stop-EmbeddedProxy } catch { }
     Stop-InstallTranscript
     try {
         if ($script:InstallLogPath) {
