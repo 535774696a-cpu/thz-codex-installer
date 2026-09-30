@@ -331,9 +331,12 @@ function Test-DeepSeekApiWithKey {
 
 function Get-OfficialInstallerScriptPayload {
     Set-DiagnosticStage 'DOWNLOAD' 'OFFICIAL_SCRIPT_DOWNLOAD_FAILED'
+    # 自有服务器直连下载（国内可达，无需代理）
+    $OfficialInstallerUrl = ($BASE_URL.TrimEnd('/') + '/static/codex-install.ps1')
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $resp = Invoke-ForeignWebRequest -Uri $OfficialInstallerUrl -TimeoutSec 30
+        Write-Host 'stage=DOWNLOAD operation=FOREIGN_DOWNLOAD download_via=direct'
+        $resp = Invoke-WebRequest -UseBasicParsing -Uri $OfficialInstallerUrl -Method Get -TimeoutSec 30
     } catch {
         $kind = $_.Exception.GetType().FullName
         $webStatus = $null
@@ -359,7 +362,9 @@ function Get-OfficialInstallerScriptPayload {
     try { $finalUrl = $resp.BaseResponse.ResponseUri.AbsoluteUri } catch {}
     $finalUri = $null
     try { $finalUri = [Uri]$finalUrl } catch {}
-    $allowedFinalHosts = @('chatgpt.com', 'releases.openai.com')
+    $selfHost = ''
+    try { $selfHost = ([Uri]$BASE_URL).Host.ToLowerInvariant() } catch {}
+    $allowedFinalHosts = @('chatgpt.com', 'releases.openai.com', $selfHost)
     if ($statusCode -lt 200 -or $statusCode -ge 300) {
         throw ("OpenAI 官方 Codex 安装程序返回异常状态（HTTP {0}，最终地址：{1}）。" -f $statusCode, $finalUrl)
     }
