@@ -1936,21 +1936,88 @@ function Install-GeminiDesktop {
         $signature.SignerCertificate.Subject -notmatch '(?:^|, )O=Google LLC(?:,|$)') {
         throw 'GEMINI_SIGNATURE_INVALID'
     }
+
+    $proxyUrl = $null
+    $useGeminiInstallProxy = $false
+    $directConnected = $false
+    $tcpClient = $null
+    try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $connectTask = $tcpClient.ConnectAsync('dl.google.com', 443)
+        if ($connectTask.Wait(8000)) {
+            $directConnected = $tcpClient.Connected
+        }
+    } catch {
+        $directConnected = $false
+    } finally {
+        if ($null -ne $tcpClient) {
+            $tcpClient.Dispose()
+        }
+    }
+
+    # GFW may allow the TCP handshake but block HTTPS; dl.google.com usually times out at TCP.
+    if (-not $directConnected) {
+        $proxyUrl = Get-TempProxyUrl
+        if ([string]::IsNullOrWhiteSpace([string]$proxyUrl)) {
+            Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY status=STARTING'
+            try {
+                $proxyUrl = Start-EmbeddedProxy
+            } catch {
+                $proxyUrl = $null
+                Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY status=FAILED'
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$proxyUrl)) {
+            $useGeminiInstallProxy = $true
+            Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY status=ENABLED'
+        } else {
+            Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY status=UNAVAILABLE'
+        }
+    } else {
+        Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY status=DIRECT'
+    }
+
     $installStart = Get-Date
     $installSpinner = Start-ProgressSpinner -Message '正在安装 Gemini Desktop...'
+    $proc = $null
     try {
         try {
             # Google Updater online installer. Explicit tag is required by the mirrored bootstrapper.
-            $arguments = '--install --silent --tag="appguid={533DD80C-942A-4464-B6A9-2E59428D784E}&appname=Gemini&needsadmin=false&ap=prod"'
-            $process = Start-Process -FilePath $exePath -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
-            Write-Host ("stage=INSTALL operation=GEMINI_INSTALL exit_code={0}" -f $process.ExitCode)
-            if ($process.ExitCode -ne 0) { throw 'GEMINI_INSTALL_FAILED' }
+            $info = New-Object Diagnostics.ProcessStartInfo
+            $info.FileName = $exePath
+            $info.Arguments = '--install --silent --tag="appguid={533DD80C-942A-4464-B6A9-2E59428D784E}&appname=Gemini&needsadmin=false&ap=prod"'
+            $info.UseShellExecute = $false
+            $info.CreateNoWindow = $true
+            if ($useGeminiInstallProxy) {
+                $info.EnvironmentVariables['HTTP_PROXY'] = [string]$proxyUrl
+                $info.EnvironmentVariables['HTTPS_PROXY'] = [string]$proxyUrl
+                $info.EnvironmentVariables['ALL_PROXY'] = [string]$proxyUrl
+                $info.EnvironmentVariables['http_proxy'] = [string]$proxyUrl
+                $info.EnvironmentVariables['https_proxy'] = [string]$proxyUrl
+                $info.EnvironmentVariables['all_proxy'] = [string]$proxyUrl
+                $info.EnvironmentVariables['NO_PROXY'] = 'localhost,127.0.0.1,::1'
+                $info.EnvironmentVariables['no_proxy'] = 'localhost,127.0.0.1,::1'
+            }
+
+            $proc = New-Object Diagnostics.Process
+            $proc.StartInfo = $info
+            if (-not $proc.Start()) { throw 'GEMINI_INSTALL_FAILED' }
+            $proc.WaitForExit()
+            $exitCode = $proc.ExitCode
+            Write-Host ("stage=INSTALL operation=GEMINI_INSTALL exit_code={0}" -f $exitCode)
+            if ($exitCode -ne 0) { throw 'GEMINI_INSTALL_FAILED' }
             $installSpinner.Succeeded = $true
         } catch {
             throw 'GEMINI_INSTALL_FAILED'
         }
     } finally {
-        Stop-ProgressSpinner -Spinner $installSpinner
+        try {
+            if ($null -ne $proc) {
+                $proc.Dispose()
+            }
+        } finally {
+            Stop-ProgressSpinner -Spinner $installSpinner
+        }
     }
     $installEnd = Get-Date
     $installElapsed = $installEnd - $installStart
