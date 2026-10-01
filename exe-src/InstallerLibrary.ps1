@@ -329,249 +329,206 @@ function Start-EmbeddedProxy {
             throw '代理订阅中没有可用的 hysteria2 节点。'
         }
 
-        Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY latency_test=start total_nodes={0}' -f $nodes.Count)
+        $candidateIndices = 0..($nodes.Count - 1) | Sort-Object { Get-Random }
+        $candidateIndices = @($candidateIndices | Select-Object -First ([Math]::Min(5, $candidateIndices.Count)))
+        Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY candidate_order=shuffled try_count={0} total_nodes={1}' -f $candidateIndices.Count, $nodes.Count)
 
-        $runspacePool = $null
-        $latencyTasks = New-Object System.Collections.Generic.List[object]
-        $latencyResults = New-Object System.Collections.Generic.List[object]
+        foreach ($candidateIdx in $candidateIndices) {
+            $selectedNode = $nodes[$candidateIdx]
+            Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY candidate_attempt node={0}' -f (($selectedNode.Name -replace '\s+','_') -replace '=','_'))
 
-        try {
-            $maximumConcurrency = [Math]::Min(20, $nodes.Count)
-            $runspacePool = [RunspaceFactory]::CreateRunspacePool(1, $maximumConcurrency)
-            $runspacePool.Open()
-
-            $latencyScript = {
-                param(
-                    [int]$Index,
-                    [string]$TargetHost,
-                    [int]$TargetPort,
-                    [int]$TimeoutMs
-                )
-
-                $client = $null
+            $process = $null
+            $socksPort = $null
+            for ($attempt = 0; $attempt -lt 100; $attempt++) {
+                $candidatePort = Get-Random -Minimum 18000 -Maximum 19000
+                $listener = $null
 
                 try {
-                    $client = New-Object System.Net.Sockets.TcpClient
-                    $watch = [Diagnostics.Stopwatch]::StartNew()
-                    $result = $client.BeginConnect($TargetHost, $TargetPort, $null, $null)
-
-                    if (-not $result.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
-                        return [PSCustomObject]@{
-                            Index   = $Index
-                            Latency = $null
+                    $listener = New-Object System.Net.Sockets.TcpListener(
+                        [Net.IPAddress]::Loopback,
+                        $candidatePort
+                    )
+                    $listener.Start()
+                    $socksPort = $candidatePort
+                    break
+                }
+                catch {
+                }
+                finally {
+                    if ($null -ne $listener) {
+                        try {
+                            $listener.Stop()
+                        }
+                        catch {
                         }
                     }
+                }
+            }
 
-                    $client.EndConnect($result)
-                    $watch.Stop()
+            if ($null -eq $socksPort) {
+                $script:EmbeddedProxyProcess = $null
+                $script:EmbeddedProxyUrl = $null
+                Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY candidate_result=failed'
+                continue
+            }
 
-                    if (-not $client.Connected) {
-                        return [PSCustomObject]@{
-                            Index   = $Index
-                            Latency = $null
+            $httpPort = $null
+            for ($attempt = 0; $attempt -lt 100; $attempt++) {
+                $candidatePort = Get-Random -Minimum 19000 -Maximum 19100
+                $listener = $null
+
+                try {
+                    $listener = New-Object System.Net.Sockets.TcpListener(
+                        [Net.IPAddress]::Loopback,
+                        $candidatePort
+                    )
+                    $listener.Start()
+                    $httpPort = $candidatePort
+                    break
+                }
+                catch {
+                }
+                finally {
+                    if ($null -ne $listener) {
+                        try {
+                            $listener.Stop()
+                        }
+                        catch {
                         }
                     }
+                }
+            }
 
-                    return [PSCustomObject]@{
-                        Index   = $Index
-                        Latency = [int][Math]::Max(1, $watch.ElapsedMilliseconds)
+            if ($null -eq $httpPort) {
+                $script:EmbeddedProxyProcess = $null
+                $script:EmbeddedProxyUrl = $null
+                Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY candidate_result=failed'
+                continue
+            }
+
+            # hysteria2 客户端使用 YAML 配置
+            # 参考: https://v2.hysteria.network/docs/advanced/Client-Configuration/
+            $yamlLines = New-Object System.Collections.Generic.List[string]
+
+            # server: "host:port"
+            $yamlLines.Add(('server: "{0}:{1}"' -f $selectedNode.Server, $selectedNode.ServerPort))
+            # auth: password
+            $yamlLines.Add(('auth: "{0}"' -f $selectedNode.Password.Replace('"', '\"')))
+            # tls
+            $yamlLines.Add('tls:')
+            $yamlLines.Add(('  sni: "{0}"' -f $selectedNode.Sni.Replace('"', '\"')))
+            $yamlLines.Add(('  insecure: {0}' -f $selectedNode.Insecure.ToString().ToLower()))
+            # socks5 inbound
+            $yamlLines.Add('socks5:')
+            $yamlLines.Add(('  listen: "127.0.0.1:{0}"' -f $socksPort))
+            # http inbound
+            $yamlLines.Add('http:')
+            $yamlLines.Add(('  listen: "127.0.0.1:{0}"' -f $httpPort))
+            # obfs (salamander)
+            if ($selectedNode.ObfsType -eq 'salamander') {
+                $yamlLines.Add('obfs:')
+                $yamlLines.Add('  type: "salamander"')
+                $yamlLines.Add(('  password: "{0}"' -f $selectedNode.ObfsPassword.Replace('"', '\"')))
+            }
+
+            [IO.File]::WriteAllText(
+                $configPath,
+                (($yamlLines -join "`n") + "`n"),
+                (New-Object Text.UTF8Encoding($false))
+            )
+
+            Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_start=begin listen_port={0}' -f $httpPort)
+
+            $process = Start-Process `
+                -FilePath $hysteriaPath `
+                -ArgumentList @('client', '-c', $configPath) `
+                -WorkingDirectory $proxyDirectory `
+                -NoNewWindow `
+                -RedirectStandardOutput $stdoutLogPath `
+                -RedirectStandardError $stderrLogPath `
+                -PassThru `
+                -ErrorAction Stop
+
+            $script:EmbeddedProxyProcess = $process
+            $proxyReady = $false
+            $deadline = [DateTime]::UtcNow.AddSeconds(15)
+
+            while ([DateTime]::UtcNow -lt $deadline) {
+                $process.Refresh()
+
+                if ($process.HasExited) {
+                    break
+                }
+
+                $probe = Test-ProxyNodeLatency `
+                    -TargetHost '127.0.0.1' `
+                    -Port $httpPort `
+                    -TimeoutMs 500
+
+                if ($null -ne $probe) {
+                    $proxyReady = $true
+                    break
+                }
+
+                Start-Sleep -Milliseconds 500
+            }
+
+            if (-not $proxyReady) {
+                try {
+                    if (-not $process.HasExited) {
+                        $process.Kill()
                     }
                 }
                 catch {
-                    return [PSCustomObject]@{
-                        Index   = $Index
-                        Latency = $null
-                    }
                 }
-                finally {
-                    if ($null -ne $client) {
-                        $client.Close()
-                        $client.Dispose()
-                    }
-                }
+
+                $script:EmbeddedProxyProcess = $null
+                $script:EmbeddedProxyUrl = $null
+                Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY candidate_result=failed'
+                continue
             }
 
-            for ($index = 0; $index -lt $nodes.Count; $index++) {
-                $node = $nodes[$index]
-                $powerShell = [PowerShell]::Create()
-                $powerShell.RunspacePool = $runspacePool
-
-                [void]$powerShell.AddScript($latencyScript)
-                [void]$powerShell.AddArgument($index)
-                [void]$powerShell.AddArgument([string]$node.Server)
-                [void]$powerShell.AddArgument([int]$node.ServerPort)
-                [void]$powerShell.AddArgument(3000)
-
-                $latencyTasks.Add([PSCustomObject]@{
-                    PowerShell = $powerShell
-                    Handle     = $powerShell.BeginInvoke()
-                })
+            $e2eOk = $false
+            try {
+                $e2eResp = Invoke-WebRequest -Uri 'https://www.google.com/generate_204' -Method Get -Proxy ('http://127.0.0.1:{0}' -f $httpPort) -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+                $e2eCode = [int]$e2eResp.StatusCode
+                if ($e2eCode -eq 200 -or $e2eCode -eq 204) {
+                    $e2eOk = $true
+                }
+            }
+            catch {
+                $e2eOk = $false
             }
 
-            foreach ($task in $latencyTasks) {
+            Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY candidate_e2e={0}' -f $(if ($e2eOk) { 'success' } else { 'failed' }))
+
+            if (-not $e2eOk) {
                 try {
-                    foreach ($result in $task.PowerShell.EndInvoke($task.Handle)) {
-                        if ($null -ne $result.Latency) {
-                            $latencyResults.Add($result)
-                        }
+                    if (-not $process.HasExited) {
+                        $process.Kill()
                     }
                 }
-                finally {
-                    $task.PowerShell.Dispose()
+                catch {
                 }
-            }
-        }
-        finally {
-            foreach ($task in $latencyTasks) {
-                if ($null -ne $task.PowerShell) {
-                    try {
-                        $task.PowerShell.Dispose()
-                    }
-                    catch {
-                    }
-                }
+
+                $script:EmbeddedProxyProcess = $null
+                $script:EmbeddedProxyUrl = $null
+                Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY candidate_result=failed'
+                continue
             }
 
-            if ($null -ne $runspacePool) {
-                $runspacePool.Close()
-                $runspacePool.Dispose()
-            }
-        }
+            $script:EmbeddedProxyUrl = 'http://127.0.0.1:{0}' -f $httpPort
+            $script:EmbeddedProxyProcess = $process
 
-        if ($latencyResults.Count -eq 0) {
-            throw '所有内置代理节点均无法连接，请检查网络后重试。'
+            Write-Host (
+                'stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_start=success proxy_url={0}' -f
+                $script:EmbeddedProxyUrl
+            )
+
+            return $script:EmbeddedProxyUrl
         }
 
-        $bestResult = $latencyResults |
-            Sort-Object -Property @{ Expression = { [int]$_.Latency } } |
-            Select-Object -First 1
-
-        $selectedNode = $nodes[[int]$bestResult.Index]
-
-        Write-Host (
-            'stage=DOWNLOAD operation=EMBEDDED_PROXY node_selected={0} latency_ms={1} total_nodes={2}' -f
-            (($selectedNode.Name -replace '\s+', '_') -replace '=', '_'),
-            [int]$bestResult.Latency,
-            $nodes.Count
-        )
-
-        $listenPort = $null
-        for ($attempt = 0; $attempt -lt 100; $attempt++) {
-            $candidatePort = Get-Random -Minimum 18000 -Maximum 19000
-            $listener = $null
-
-            try {
-                $listener = New-Object System.Net.Sockets.TcpListener(
-                    [Net.IPAddress]::Loopback,
-                    $candidatePort
-                )
-                $listener.Start()
-                $listenPort = $candidatePort
-                break
-            }
-            catch {
-            }
-            finally {
-                if ($null -ne $listener) {
-                    try {
-                        $listener.Stop()
-                    }
-                    catch {
-                    }
-                }
-            }
-        }
-
-        if ($null -eq $listenPort) {
-            throw '无法为内置代理分配本地监听端口。'
-        }
-
-        # hysteria2 客户端使用 YAML 配置
-        # 参考: https://v2.hysteria.network/docs/advanced/Client-Configuration/
-        $yamlLines = New-Object System.Collections.Generic.List[string]
-
-        # server: "host:port"
-        $yamlLines.Add(('server: "{0}:{1}"' -f $selectedNode.Server, $selectedNode.ServerPort))
-        # auth: password
-        $yamlLines.Add(('auth: "{0}"' -f $selectedNode.Password.Replace('"', '\"')))
-        # tls
-        $yamlLines.Add('tls:')
-        $yamlLines.Add(('  sni: "{0}"' -f $selectedNode.Sni.Replace('"', '\"')))
-        $yamlLines.Add(('  insecure: {0}' -f $selectedNode.Insecure.ToString().ToLower()))
-        # socks5 inbound
-        $yamlLines.Add('socks5:')
-        $yamlLines.Add(('  listen: "127.0.0.1:{0}"' -f $listenPort))
-        # obfs (salamander)
-        if ($selectedNode.ObfsType -eq 'salamander') {
-            $yamlLines.Add('obfs:')
-            $yamlLines.Add('  type: "salamander"')
-            $yamlLines.Add(('  password: "{0}"' -f $selectedNode.ObfsPassword.Replace('"', '\"')))
-        }
-
-        [IO.File]::WriteAllText(
-            $configPath,
-            (($yamlLines -join "`n") + "`n"),
-            (New-Object Text.UTF8Encoding($false))
-        )
-
-        Write-Host ('stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_start=begin listen_port={0}' -f $listenPort)
-
-        $process = Start-Process `
-            -FilePath $hysteriaPath `
-            -ArgumentList @('client', '-c', $configPath) `
-            -WorkingDirectory $proxyDirectory `
-            -NoNewWindow `
-            -RedirectStandardOutput $stdoutLogPath `
-            -RedirectStandardError $stderrLogPath `
-            -PassThru `
-            -ErrorAction Stop
-
-        $script:EmbeddedProxyProcess = $process
-        $proxyReady = $false
-        $deadline = [DateTime]::UtcNow.AddSeconds(15)
-
-        while ([DateTime]::UtcNow -lt $deadline) {
-            $process.Refresh()
-
-            if ($process.HasExited) {
-                break
-            }
-
-            $probe = Test-ProxyNodeLatency `
-                -TargetHost '127.0.0.1' `
-                -Port $listenPort `
-                -TimeoutMs 500
-
-            if ($null -ne $probe) {
-                $proxyReady = $true
-                break
-            }
-
-            Start-Sleep -Milliseconds 500
-        }
-
-        if (-not $proxyReady) {
-            try {
-                if (-not $process.HasExited) {
-                    $process.Kill()
-                }
-            }
-            catch {
-            }
-
-            $script:EmbeddedProxyProcess = $null
-            $script:EmbeddedProxyUrl = $null
-            throw '内置代理启动超时，请查看 hysteria 日志。'
-        }
-
-        $script:EmbeddedProxyUrl = 'socks5://127.0.0.1:{0}' -f $listenPort
-
-        Write-Host (
-            'stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_start=success proxy_url={0}' -f
-            $script:EmbeddedProxyUrl
-        )
-
-        return $script:EmbeddedProxyUrl
+        throw '所有内置代理节点均无法连接，请检查网络后重试。'
     }
     catch {
         if ($null -ne $script:EmbeddedProxyProcess) {
