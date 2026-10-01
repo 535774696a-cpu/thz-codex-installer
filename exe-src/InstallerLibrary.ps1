@@ -558,6 +558,25 @@ function Start-EmbeddedProxy {
     }
 }
 
+function Get-TempProxyUrl {
+    <#
+    .SYNOPSIS
+        返回当前内置代理 (hysteria2) 的 URL，未启动时返回空字符串。
+    #>
+    [CmdletBinding()]
+    param()
+    try {
+        if ($null -ne $script:EmbeddedProxyProcess -and
+            -not $script:EmbeddedProxyProcess.HasExited -and
+            -not [string]::IsNullOrWhiteSpace([string]$script:EmbeddedProxyUrl)) {
+            return [string]$script:EmbeddedProxyUrl
+        }
+    }
+    catch {
+    }
+    return ''
+}
+
 function Test-DirectConnection {
     <#
     .SYNOPSIS
