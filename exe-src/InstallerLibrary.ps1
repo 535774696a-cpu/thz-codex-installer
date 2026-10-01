@@ -1939,24 +1939,17 @@ function Install-GeminiDesktop {
 
     $proxyUrl = $null
     $useGeminiInstallProxy = $false
-    $directConnected = $false
-    $tcpClient = $null
+    $directOk = $false
     try {
-        $tcpClient = New-Object System.Net.Sockets.TcpClient
-        $connectTask = $tcpClient.ConnectAsync('dl.google.com', 443)
-        if ($connectTask.Wait(8000)) {
-            $directConnected = $tcpClient.Connected
-        }
+        # Real HTTPS probe: any HTTP response (even 404) proves the TLS path works.
+        # TCP handshake alone is not enough (GFW may allow handshake but block HTTPS).
+        $null = Invoke-WebRequest -Uri 'https://dl.google.com/' -Method Head -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
+        $directOk = $true
     } catch {
-        $directConnected = $false
-    } finally {
-        if ($null -ne $tcpClient) {
-            $tcpClient.Dispose()
-        }
+        $directOk = $false
     }
 
-    # GFW may allow the TCP handshake but block HTTPS; dl.google.com usually times out at TCP.
-    if (-not $directConnected) {
+    if (-not $directOk) {
         $proxyUrl = Get-TempProxyUrl
         if ([string]::IsNullOrWhiteSpace([string]$proxyUrl)) {
             Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY status=STARTING'
