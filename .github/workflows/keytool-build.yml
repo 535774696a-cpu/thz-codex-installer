@@ -1,0 +1,49 @@
+name: Build KeyTool
+
+on:
+  push:
+    paths:
+      - 'keytool/**'
+  pull_request:
+    paths:
+      - 'keytool/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: PowerShell 5.1 syntax check
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $errors = $null
+          [void][System.Management.Automation.PSParser]::Tokenize(
+            (Get-Content -LiteralPath 'keytool/KeyTool.ps1' -Raw),
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            foreach ($e in $errors) { Write-Error $e.Message }
+            throw 'KeyTool.ps1 syntax validation failed.'
+          }
+          Write-Host 'Syntax OK'
+
+      - name: Compile
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\keytool\build-keytool.ps1 -OutDir (Join-Path $PWD 'dist-keytool')
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: keytool-build
+          if-no-files-found: error
+          path: |
+            dist-keytool/THZ-DeepSeek-KeyTool.exe
+            dist-keytool/SHA256SUMS.txt
