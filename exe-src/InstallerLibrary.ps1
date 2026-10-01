@@ -683,18 +683,23 @@ function Invoke-ForeignWebRequest {
         [Parameter(Mandatory = $true)]
         [string]$Uri,
 
-        [int]$TimeoutSec = 30
+        [int]$TimeoutSec = 30,
+
+        [string]$OutFile = ''
     )
 
     # P0 按需下载：先测试直连，直连可用则不下载代理
     if (Test-DirectConnection -Uri $Uri -TimeoutSec 10) {
         Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=direct_probed'
 
-        return Invoke-WebRequest `
-            -Uri $Uri `
-            -UseBasicParsing `
-            -TimeoutSec $TimeoutSec `
-            -ErrorAction Stop
+        $iwrParams = @{
+            Uri = $Uri
+            UseBasicParsing = $true
+            TimeoutSec = $TimeoutSec
+            ErrorAction = 'Stop'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($OutFile)) { $iwrParams['OutFile'] = $OutFile }
+        return Invoke-WebRequest @iwrParams
     }
 
     Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST direct_probed=failed'
@@ -702,11 +707,14 @@ function Invoke-ForeignWebRequest {
     try {
         Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=direct'
 
-        return Invoke-WebRequest `
-            -Uri $Uri `
-            -UseBasicParsing `
-            -TimeoutSec $TimeoutSec `
-            -ErrorAction Stop
+        $iwrParams = @{
+            Uri = $Uri
+            UseBasicParsing = $true
+            TimeoutSec = $TimeoutSec
+            ErrorAction = 'Stop'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($OutFile)) { $iwrParams['OutFile'] = $OutFile }
+        return Invoke-WebRequest @iwrParams
     }
     catch {
         $directError = $_.Exception.Message
@@ -718,12 +726,15 @@ function Invoke-ForeignWebRequest {
 
         Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=embedded_proxy'
 
-        return Invoke-WebRequest `
-            -Uri $Uri `
-            -Proxy $embeddedProxyUrl `
-            -UseBasicParsing `
-            -TimeoutSec $TimeoutSec `
-            -ErrorAction Stop
+        $iwrParams = @{
+            Uri = $Uri
+            Proxy = $embeddedProxyUrl
+            UseBasicParsing = $true
+            TimeoutSec = $TimeoutSec
+            ErrorAction = 'Stop'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($OutFile)) { $iwrParams['OutFile'] = $OutFile }
+        return Invoke-WebRequest @iwrParams
     }
     catch {
         $embeddedProxyError = $_.Exception.Message
@@ -736,12 +747,15 @@ function Invoke-ForeignWebRequest {
 
         Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=legacy_proxy'
 
-        return Invoke-WebRequest `
-            -Uri $Uri `
-            -Proxy $legacyProxyUrl `
-            -UseBasicParsing `
-            -TimeoutSec $TimeoutSec `
-            -ErrorAction Stop
+        $iwrParams = @{
+            Uri = $Uri
+            Proxy = $legacyProxyUrl
+            UseBasicParsing = $true
+            TimeoutSec = $TimeoutSec
+            ErrorAction = 'Stop'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($OutFile)) { $iwrParams['OutFile'] = $OutFile }
+        return Invoke-WebRequest @iwrParams
     }
     catch {
         $legacyProxyError = $_.Exception.Message
@@ -1802,22 +1816,8 @@ function Install-ClaudeDesktop {
     $downloadSpinner = Start-ProgressSpinner -Message '正在下载 Claude Desktop 安装包...'
     try {
         try {
-            $resp = Invoke-ForeignWebRequest -Uri $url -TimeoutSec 300
-            $fileStream = $null
-            try {
-                $fileStream = [IO.File]::Create($msixPath)
-                if ($null -ne $resp.RawContentStream) {
-                    $resp.RawContentStream.Position = 0
-                    $resp.RawContentStream.CopyTo($fileStream)
-                } else {
-                    $bytes = [Text.Encoding]::GetEncoding('iso-8859-1').GetBytes([string]$resp.Content)
-                    $fileStream.Write($bytes, 0, $bytes.Length)
-                }
-            } finally {
-                if ($null -ne $fileStream) {
-                    $fileStream.Dispose()
-                }
-            }
+            # Stream directly to disk: 290MB+ package must not be buffered in memory
+            Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $msixPath | Out-Null
             $downloadSpinner.Succeeded = $true
         } catch {
             throw 'DESKTOP_DOWNLOAD_FAILED'
@@ -1894,22 +1894,8 @@ function Install-GeminiDesktop {
     $downloadSpinner = Start-ProgressSpinner -Message '正在下载 Gemini Desktop 安装包...'
     try {
         try {
-            $resp = Invoke-ForeignWebRequest -Uri $url -TimeoutSec 300
-            $fileStream = $null
-            try {
-                $fileStream = [IO.File]::Create($exePath)
-                if ($null -ne $resp.RawContentStream) {
-                    $resp.RawContentStream.Position = 0
-                    $resp.RawContentStream.CopyTo($fileStream)
-                } else {
-                    $bytes = [Text.Encoding]::GetEncoding('iso-8859-1').GetBytes([string]$resp.Content)
-                    $fileStream.Write($bytes, 0, $bytes.Length)
-                }
-            } finally {
-                if ($null -ne $fileStream) {
-                    $fileStream.Dispose()
-                }
-            }
+            # Stream directly to disk: large package must not be buffered in memory
+            Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $exePath | Out-Null
             $downloadSpinner.Succeeded = $true
         } catch {
             throw 'DESKTOP_DOWNLOAD_FAILED'
