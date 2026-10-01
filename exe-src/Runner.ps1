@@ -290,58 +290,6 @@ function Get-OfficialDesktopMsix {
     throw 'DESKTOP_MSIX_DOWNLOAD_FAILED'
 }
 
-function Install-OfficialCodexDesktop {
-    $existing = Get-OfficialCodexDesktopPackage
-    if ($null -ne $existing) { return $existing }
-    $arch=if([string]::IsNullOrWhiteSpace($env:PROCESSOR_ARCHITEW6432)){[string]$env:PROCESSOR_ARCHITECTURE}else{[string]$env:PROCESSOR_ARCHITEW6432}
-    if($arch -eq 'AMD64'){$packageArch='x64'}elseif($arch -eq 'ARM64'){$packageArch='arm64'}else{throw 'DESKTOP_ARCH_UNSUPPORTED'}
-    $source="https://persistent.oaistatic.com/codex-app-prod/ChatGPT-$packageArch.msix"
-    $msix=Join-Path $env:TEMP ("OpenAI-Codex-{0}-{1}.msix" -f $packageArch,[guid]::NewGuid().ToString('N'))
-    try {
-        Write-InstallProcessEvent -State 'install_process_started'
-        Get-OfficialDesktopMsix -Source $source -Destination $msix
-        Set-DiagnosticStage 'PACKAGE_VERIFY' 'DESKTOP_PACKAGE_VERIFY_FAILED'
-        if(-not(Test-Path -LiteralPath $msix -PathType Leaf) -or (Get-Item -LiteralPath $msix).Length -lt 50000000){throw 'DESKTOP_PACKAGE_TOO_SMALL'}
-        $probe=New-Object IO.FileStream($msix,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read);$head=New-Object byte[] 4
-        try{if($probe.Read($head,0,4)-ne 4){throw 'DESKTOP_MSIX_FORMAT_INVALID'}}finally{$probe.Dispose()}
-        if($head[0]-in @(0x3c,0x7b,0x5b)){throw 'DESKTOP_ERROR_BODY_REJECTED'}
-        if($head[0]-ne 0x50 -or $head[1]-ne 0x4b){throw 'DESKTOP_MSIX_FORMAT_INVALID'}
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip=[IO.Compression.ZipFile]::OpenRead($msix)
-        try{
-            $manifest=$zip.GetEntry('AppxManifest.xml');$signature=$zip.GetEntry('AppxSignature.p7x')
-            if($null-eq $manifest -or $null-eq $signature -or $manifest.Length -lt 100){throw 'DESKTOP_MSIX_FORMAT_INVALID'}
-            $settings=New-Object Xml.XmlReaderSettings;$settings.DtdProcessing=[Xml.DtdProcessing]::Prohibit;$settings.XmlResolver=$null
-            $stream=$manifest.Open();$reader=[Xml.XmlReader]::Create($stream,$settings);$xml=New-Object Xml.XmlDocument;$xml.XmlResolver=$null
-            try{$xml.Load($reader)}finally{$reader.Dispose();$stream.Dispose()}
-            $identity=$xml.DocumentElement.SelectSingleNode("*[local-name()='Identity']")
-            if($null-eq $identity -or $identity.GetAttribute('Name') -ne 'OpenAI.Codex' -or $identity.GetAttribute('Publisher') -ne 'CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B' -or $identity.GetAttribute('ProcessorArchitecture') -ne $packageArch){throw 'DESKTOP_PACKAGE_IDENTITY_INVALID'}
-        }finally{$zip.Dispose()}
-        $auth=Get-AuthenticodeSignature -FilePath $msix
-        if($auth.Status -ne [Management.Automation.SignatureStatus]::Valid){throw 'DESKTOP_SIGNATURE_INVALID'}
-        Set-DiagnosticStage 'INSTALL' 'DESKTOP_INSTALL_FAILED'
-        if($null-eq (Get-Command Add-AppxPackage -ErrorAction SilentlyContinue)){throw 'DESKTOP_APPX_UNAVAILABLE'}
-        try{Add-AppxPackage -Path $msix -ErrorAction Stop}catch{throw 'DESKTOP_APPX_INSTALL_FAILED'}
-        $installed = Get-OfficialCodexDesktopPackage
-        if ($null -eq $installed) { throw 'DESKTOP_PACKAGE_VERIFY_FAILED' }
-        if([string]$installed.Architecture -notmatch $(if($packageArch-eq'x64'){'X64'}else{'Arm64'})){throw 'DESKTOP_ARCH_MISMATCH'}
-        Write-InstallProcessEvent -State 'install_process_completed' -ExitCode '0'
-        return $installed
-    } catch {
-        Write-InstallProcessEvent -State 'install_process_failed' -ExceptionType ($_.Exception.GetType().FullName)
-        throw
-    } finally {
-        if(Test-Path -LiteralPath $msix -PathType Leaf){Remove-Item -LiteralPath $msix -Force -ErrorAction SilentlyContinue}
-    }
-}
-
-function Test-OfficialCodexDesktopRegistration($Package) {
-    if ($null -eq $Package -or $Package.Name -ne 'OpenAI.Codex' -or $Package.PublisherId -ne '2p2nqsd0c76g0' -or $Package.Status -ne 'Ok') { throw 'DESKTOP_PACKAGE_VERIFY_FAILED' }
-    $app = Get-StartApps | Where-Object { $_.AppID -eq 'OpenAI.Codex_2p2nqsd0c76g0!App' } | Select-Object -First 1
-    if ($null -eq $app) { throw 'DESKTOP_APP_REGISTRATION_MISSING' }
-    return [string]$app.AppID
-}
-
 # =====================================================================
 # P0-1 安装日志（文件 transcript）+ P0-2 失败上报服务端
 # 移植自 Install-Codex-AI.fixed.ps1（v3.3.0），适配本入口的变量与诊断体系：
@@ -479,40 +427,57 @@ Add-Type -AssemblyName System.Drawing
     } else {
         Set-DiagnosticStage 'INSTALL' 'DESKTOP_INSTALL_FAILED'
         $desktopPackage=Install-OfficialCodexDesktop
-        $desktopAppId=Test-OfficialCodexDesktopRegistration -Package $desktopPackage
+        $desktopAppId=Test-OfficialCodexDesktopRegistration
     }
-    Set-DiagnosticStage 'CONFIG' 'LOCAL_CONFIG_FAILED'
-    $homePath=Get-CodexHome
-    if (-not [IO.Path]::IsPathRooted($homePath) -or [IO.Path]::GetFullPath($homePath).StartsWith([IO.Path]::GetFullPath($PSScriptRoot),[StringComparison]::OrdinalIgnoreCase)) { throw 'CONFIG_LOCATION_INVALID' }
-    New-Item -ItemType Directory -Path $homePath -Force | Out-Null
-    $configPath=Join-Path $homePath 'config.toml';$modelsPath=Join-Path $homePath 'models.json'
-    if ($cfg.provider_type -eq 'deepseek') {
-        $localKey=Invoke-DeepSeekKeySetup -CodexHome $homePath -ConfigPath $configPath -ModelsPath $modelsPath -Cfg $cfg -UseEnvironmentKey:($cfg.client_type -eq 'desktop')
-        $localKey=$null
+    if ($cfg.client_type -eq 'desktop') {
+        # CONFIG 阶段：ChatGPT Desktop 不写 config.toml；可选配置 DeepSeek API Key（用户取消/选否不抛致命错误）
+        Set-DiagnosticStage 'CONFIG' 'LOCAL_CONFIG_FAILED'
+        $dsResult=Invoke-ChatGPTDeepSeekOptionalSetup
+        # VERIFY 阶段：确认 Appx 包仍存在
+        Set-DiagnosticStage 'CODEX_VERIFY' 'CODEX_VERSION_OR_CONFIG_FAILED'
+        $verifyPkg=Test-OfficialCodexDesktopRegistration
+        $version=[string]$verifyPkg.Version
+        # 启动应用
+        Start-ChatGPTDesktopApp -PackageFamilyName $verifyPkg.PackageFamilyName
+        # verification.xml（desktop 简化版：只含 Version/ClientType/ProviderType/AppId）
+        $proof=New-Object Xml.XmlDocument;$root=$proof.CreateElement('Verification');$null=$proof.AppendChild($root)
+        $dvalues=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;AppId=[string]$verifyPkg.PackageFamilyName}
+        foreach($name in $dvalues.Keys){$node=$proof.CreateElement($name);$node.InnerText=$dvalues[$name];$null=$root.AppendChild($node)}
+        $proof.Save((Join-Path $PSScriptRoot 'verification.xml'))
     } else {
-        $null=Set-OfficialAccountConfig -CodexHome $homePath -ConfigPath $configPath -ModelsPath $modelsPath
+        Set-DiagnosticStage 'CONFIG' 'LOCAL_CONFIG_FAILED'
+        $homePath=Get-CodexHome
+        if (-not [IO.Path]::IsPathRooted($homePath) -or [IO.Path]::GetFullPath($homePath).StartsWith([IO.Path]::GetFullPath($PSScriptRoot),[StringComparison]::OrdinalIgnoreCase)) { throw 'CONFIG_LOCATION_INVALID' }
+        New-Item -ItemType Directory -Path $homePath -Force | Out-Null
+        $configPath=Join-Path $homePath 'config.toml';$modelsPath=Join-Path $homePath 'models.json'
+        if ($cfg.provider_type -eq 'deepseek') {
+            $localKey=Invoke-DeepSeekKeySetup -CodexHome $homePath -ConfigPath $configPath -ModelsPath $modelsPath -Cfg $cfg -UseEnvironmentKey:($cfg.client_type -eq 'desktop')
+            $localKey=$null
+        } else {
+            $null=Set-OfficialAccountConfig -CodexHome $homePath -ConfigPath $configPath -ModelsPath $modelsPath
+        }
+        Set-DiagnosticStage 'CODEX_VERIFY' 'CODEX_VERSION_OR_CONFIG_FAILED'
+        $version=if($cfg.client_type -eq 'cli'){Invoke-CodexProbe -Command $StandaloneExe}else{[string]$desktopPackage.Version}
+        $raw=[IO.File]::ReadAllText($configPath)
+        if ($cfg.provider_type -eq 'deepseek') {
+            $authValid=if($cfg.client_type -eq 'desktop'){$raw -match '(?m)^env_key\s*=\s*"DEEPSEEK_API_KEY"\s*$'}else{$raw -match '(?m)^experimental_bearer_token\s*=\s*"[^"\r\n]+"\s*$'}
+            if ($raw -notmatch '(?m)^model_provider\s*=\s*"deepseek"\s*$' -or $raw -notmatch '(?m)^\[model_providers\.deepseek\]\s*$' -or -not $authValid) { throw 'CONFIG_INVALID' }
+            if ($raw -notmatch ('(?m)^model\s*=\s*"'+[regex]::Escape($cfg.model)+'"\s*$')) { throw 'MODEL_INVALID' }
+            if ($raw -notmatch '(?m)^base_url\s*=\s*"https://api\.deepseek\.com/?"\s*$') { throw 'PROVIDER_URL_INVALID' }
+            $catalogPath=$modelsPath -replace '\\','/'
+            if ($raw -notmatch ('(?m)^model_catalog_json\s*=\s*"'+[regex]::Escape($catalogPath)+'"\s*$')) { throw 'CATALOG_PATH_INVALID' }
+            $models=[IO.File]::ReadAllText($modelsPath)|ConvertFrom-Json
+            if (@($models.models|ForEach-Object {$_.slug}) -notcontains $cfg.model) { throw 'MODEL_CATALOG_INVALID' }
+        } else {
+            $top=($raw -split '(?m)^\s*\[')[0]
+            if ($top -match '(?m)^\s*(model|model_provider|preferred_auth_method|forced_login_method|model_reasoning_effort|model_catalog_json)\s*=') { throw 'OFFICIAL_PROVIDER_CONFIG_INVALID' }
+        }
+        # Only hashes and paths, never configuration contents or keys, leave this child process.
+        $proof=New-Object Xml.XmlDocument;$root=$proof.CreateElement('Verification');$null=$proof.AppendChild($root)
+        $values=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;Executable=$(if($cfg.client_type -eq 'cli'){$StandaloneExe}else{''});AppId=$(if($desktopAppId){$desktopAppId}else{''});Config=$configPath;Models=$(if(Test-Path -LiteralPath $modelsPath -PathType Leaf){$modelsPath}else{''});ConfigHash=(Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash;ModelsHash=$(if(Test-Path -LiteralPath $modelsPath -PathType Leaf){(Get-FileHash -LiteralPath $modelsPath -Algorithm SHA256).Hash}else{''})}
+        foreach($name in $values.Keys){$node=$proof.CreateElement($name);$node.InnerText=$values[$name];$null=$root.AppendChild($node)}
+        $proof.Save((Join-Path $PSScriptRoot 'verification.xml'))
     }
-    Set-DiagnosticStage 'CODEX_VERIFY' 'CODEX_VERSION_OR_CONFIG_FAILED'
-    $version=if($cfg.client_type -eq 'cli'){Invoke-CodexProbe -Command $StandaloneExe}else{[string]$desktopPackage.Version}
-    $raw=[IO.File]::ReadAllText($configPath)
-    if ($cfg.provider_type -eq 'deepseek') {
-        $authValid=if($cfg.client_type -eq 'desktop'){$raw -match '(?m)^env_key\s*=\s*"DEEPSEEK_API_KEY"\s*$'}else{$raw -match '(?m)^experimental_bearer_token\s*=\s*"[^"\r\n]+"\s*$'}
-        if ($raw -notmatch '(?m)^model_provider\s*=\s*"deepseek"\s*$' -or $raw -notmatch '(?m)^\[model_providers\.deepseek\]\s*$' -or -not $authValid) { throw 'CONFIG_INVALID' }
-        if ($raw -notmatch ('(?m)^model\s*=\s*"'+[regex]::Escape($cfg.model)+'"\s*$')) { throw 'MODEL_INVALID' }
-        if ($raw -notmatch '(?m)^base_url\s*=\s*"https://api\.deepseek\.com/?"\s*$') { throw 'PROVIDER_URL_INVALID' }
-        $catalogPath=$modelsPath -replace '\\','/'
-        if ($raw -notmatch ('(?m)^model_catalog_json\s*=\s*"'+[regex]::Escape($catalogPath)+'"\s*$')) { throw 'CATALOG_PATH_INVALID' }
-        $models=[IO.File]::ReadAllText($modelsPath)|ConvertFrom-Json
-        if (@($models.models|ForEach-Object {$_.slug}) -notcontains $cfg.model) { throw 'MODEL_CATALOG_INVALID' }
-    } else {
-        $top=($raw -split '(?m)^\s*\[')[0]
-        if ($top -match '(?m)^\s*(model|model_provider|preferred_auth_method|forced_login_method|model_reasoning_effort|model_catalog_json)\s*=') { throw 'OFFICIAL_PROVIDER_CONFIG_INVALID' }
-    }
-    # Only hashes and paths, never configuration contents or keys, leave this child process.
-    $proof=New-Object Xml.XmlDocument;$root=$proof.CreateElement('Verification');$null=$proof.AppendChild($root)
-    $values=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;Executable=$(if($cfg.client_type -eq 'cli'){$StandaloneExe}else{''});AppId=$(if($desktopAppId){$desktopAppId}else{''});Config=$configPath;Models=$(if(Test-Path -LiteralPath $modelsPath -PathType Leaf){$modelsPath}else{''});ConfigHash=(Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash;ModelsHash=$(if(Test-Path -LiteralPath $modelsPath -PathType Leaf){(Get-FileHash -LiteralPath $modelsPath -Algorithm SHA256).Hash}else{''})}
-    foreach($name in $values.Keys){$node=$proof.CreateElement($name);$node.InnerText=$values[$name];$null=$root.AppendChild($node)}
-    $proof.Save((Join-Path $PSScriptRoot 'verification.xml'))
     Invoke-ApiComplete
     Write-SafeDiagnostic 'PASS' 'NONE' '0'
     try { Stop-EmbeddedProxy } catch { }

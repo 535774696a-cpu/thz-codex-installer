@@ -1573,6 +1573,226 @@ function Test-ConfigWritten {
 # 不修改 config.toml。登录完全由用户在 OpenAI 官方 Desktop App / 官网
 # 流程中自行完成，本安装器不采集任何凭据。
 
+function Install-OfficialCodexDesktop {
+    $processorArch = [string]$env:PROCESSOR_ARCHITECTURE
+    if ($processorArch -eq 'ARM64') {
+        $arch = 'arm64'
+    } elseif ($processorArch -eq 'AMD64') {
+        $arch = 'x64'
+    } else {
+        throw 'DESKTOP_ARCH_UNSUPPORTED'
+    }
+
+    $url = "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-$arch.msix"
+    $downloadDir = Join-Path $env:TEMP 'THZ-ChatGPT-Desktop'
+    if (-not (Test-Path -LiteralPath $downloadDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+    }
+    $msixPath = Join-Path $downloadDir "ChatGPT-$arch.msix"
+
+    Write-Ok '正在下载 ChatGPT Desktop 安装包...'
+    try {
+        $resp = Invoke-ForeignWebRequest -Uri $url -TimeoutSec 300
+        $fileStream = $null
+        try {
+            $fileStream = [IO.File]::Create($msixPath)
+            if ($null -ne $resp.RawContentStream) {
+                $resp.RawContentStream.Position = 0
+                $resp.RawContentStream.CopyTo($fileStream)
+            } else {
+                $bytes = [Text.Encoding]::GetEncoding('iso-8859-1').GetBytes([string]$resp.Content)
+                $fileStream.Write($bytes, 0, $bytes.Length)
+            }
+        } finally {
+            if ($null -ne $fileStream) {
+                $fileStream.Dispose()
+            }
+        }
+    } catch {
+        throw 'DESKTOP_DOWNLOAD_FAILED'
+    }
+
+    Write-Ok '正在校验 ChatGPT Desktop 安装包...'
+    if (-not (Test-Path -LiteralPath $msixPath -PathType Leaf)) {
+        throw 'DESKTOP_PACKAGE_TOO_SMALL'
+    }
+    $size = [long](Get-Item -LiteralPath $msixPath).Length
+    if ($size -le 10MB) {
+        throw 'DESKTOP_PACKAGE_TOO_SMALL'
+    }
+
+    $probe = $null
+    $head = New-Object byte[] 2
+    try {
+        $probe = [IO.File]::OpenRead($msixPath)
+        if ($probe.Read($head, 0, 2) -ne 2) {
+            throw 'DESKTOP_MSIX_FORMAT_INVALID'
+        }
+    } finally {
+        if ($null -ne $probe) {
+            $probe.Dispose()
+        }
+    }
+    if ($head[0] -ne 0x50 -or $head[1] -ne 0x4B) {
+        throw 'DESKTOP_MSIX_FORMAT_INVALID'
+    }
+
+    Write-Ok '正在安装 ChatGPT Desktop...'
+    try {
+        Add-AppxPackage -Path $msixPath -ErrorAction Stop
+    } catch {
+        throw 'DESKTOP_APPX_INSTALL_FAILED'
+    }
+    Write-Ok 'ChatGPT Desktop 安装完成。'
+
+    return @{
+        MsixPath = $msixPath
+        Arch = $arch
+        SizeBytes = $size
+    }
+}
+
+function Test-OfficialCodexDesktopRegistration {
+    $pkg = Get-AppxPackage -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq 'OpenAI.ChatGPT' } |
+        Select-Object -First 1
+    if ($null -eq $pkg) {
+        $pkg = Get-AppxPackage -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -like '*OpenAI*' -or
+                $_.PackageFamilyName -like '*OpenAI*'
+            } |
+            Select-Object -First 1
+    }
+    if ($null -eq $pkg) {
+        throw 'DESKTOP_APP_REGISTRATION_MISSING'
+    }
+    return @{
+        PackageFamilyName = $pkg.PackageFamilyName
+        Version = [string]$pkg.Version
+        Name = $pkg.Name
+    }
+}
+
+function Show-YesNoDialog {
+    param(
+        [string]$Title,
+        [string]$Message
+    )
+
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = $Title
+    $form.Size = New-Object System.Drawing.Size(480, 240)
+    $form.StartPosition = 'CenterScreen'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.TopMost = $true
+    $form.Font = New-Object System.Drawing.Font('Microsoft YaHei', 10)
+
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = $Message
+    $label.Location = New-Object System.Drawing.Point(24, 20)
+    $label.Size = New-Object System.Drawing.Size(420, 105)
+    $label.Font = New-Object System.Drawing.Font('Microsoft YaHei', 10)
+
+    $yesButton = New-Object System.Windows.Forms.Button
+    $yesButton.Text = '是'
+    $yesButton.Location = New-Object System.Drawing.Point(180, 145)
+    $yesButton.Size = New-Object System.Drawing.Size(120, 36)
+    $yesButton.DialogResult = [System.Windows.Forms.DialogResult]::Yes
+
+    $noButton = New-Object System.Windows.Forms.Button
+    $noButton.Text = '否'
+    $noButton.Location = New-Object System.Drawing.Point(320, 145)
+    $noButton.Size = New-Object System.Drawing.Size(120, 36)
+    $noButton.DialogResult = [System.Windows.Forms.DialogResult]::No
+
+    $form.Controls.Add($label)
+    $form.Controls.Add($yesButton)
+    $form.Controls.Add($noButton)
+    $form.AcceptButton = $yesButton
+    $form.CancelButton = $noButton
+
+    try {
+        $dialogResult = $form.ShowDialog()
+        return ($dialogResult -eq [System.Windows.Forms.DialogResult]::Yes)
+    } finally {
+        $form.Dispose()
+    }
+}
+
+function Invoke-ChatGPTDeepSeekOptionalSetup {
+    $want = Show-YesNoDialog -Title '特好装' -Message "ChatGPT Desktop 安装成功！`n`n是否需要配置 DeepSeek API Key？`n（配置后可在本机使用 DeepSeek 服务）"
+    if (-not $want) {
+        return @{ Configured = $false }
+    }
+
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        $res = Show-DeepSeekKeyGuiDialog
+        if (-not $res.Ok) {
+            $res = $null
+            $script:GuiKeyResult = $null
+            $script:GuiKeyBox = $null
+            return @{ Configured = $false; Cancelled = $true }
+        }
+
+        $key = ([string]$res.Key).Trim()
+        $res = $null
+        $script:GuiKeyResult = $null
+        $script:GuiKeyBox = $null
+
+        if ($key.Length -lt 12) {
+            $key = $null
+            [Windows.Forms.MessageBox]::Show(
+                'Key 不完整，请重新输入。',
+                '特好装'
+            ) | Out-Null
+            continue
+        }
+
+        $result = Test-DeepSeekApiWithKey -ApiKey $key
+        if ($result -ne 'ok') {
+            $key = $null
+            $retry = [Windows.Forms.MessageBox]::Show(
+                '当前 Key 或网络未能通过验证。是否重新输入？',
+                '特好装',
+                [Windows.Forms.MessageBoxButtons]::RetryCancel
+            )
+            if ($retry -eq [Windows.Forms.DialogResult]::Retry) {
+                continue
+            }
+            throw 'KEY_VALIDATION_FAILED'
+        }
+
+        try {
+            [Environment]::SetEnvironmentVariable(
+                'DEEPSEEK_API_KEY',
+                $key,
+                [EnvironmentVariableTarget]::User
+            )
+        } finally {
+            $key = $null
+        }
+
+        [Windows.Forms.MessageBox]::Show(
+            'DeepSeek API Key 配置成功！',
+            '特好装'
+        ) | Out-Null
+        return @{ Configured = $true }
+    }
+
+    throw 'KEY_ATTEMPTS_EXHAUSTED'
+}
+
+function Start-ChatGPTDesktopApp {
+    param([string]$PackageFamilyName)
+    Start-Process "shell:AppsFolder\$PackageFamilyName!App"
+}
+
 # =====================================================================
 # [5/7] / [6/7] 验证 Codex CLI
 # =====================================================================
