@@ -1,0 +1,233 @@
+name: Desktop Download Test (100x)
+
+# 三个桌面应用的下载链路压力测试
+# Windows + Mac，每个应用可配置迭代次数（冒烟 10 / 全量 100）
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: '每个应用跑多少遍 (1-100)'
+        required: true
+        default: '10'
+        type: string
+      apps:
+        description: '测试哪些应用 (逗号分隔: chatgpt,claude,gemini)'
+        required: true
+        default: 'chatgpt,claude,gemini'
+        type: string
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      apps: ${{ steps.matrix.outputs.apps }}
+    steps:
+      - name: Validate and build matrix
+        id: matrix
+        shell: bash
+        env:
+          ITERATIONS: ${{ inputs.iterations }}
+          APPS: ${{ inputs.apps }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ITERATIONS" =~ ^[0-9]+$ ]] || (( ITERATIONS < 1 || ITERATIONS > 100 )); then
+            echo "iterations must be 1-100." >&2
+            exit 1
+          fi
+          # 验证应用列表
+          IFS=',' read -ra APP_ARR <<< "$APPS"
+          VALID_APPS="chatgpt claude gemini"
+          for app in "${APP_ARR[@]}"; do
+            app=$(echo "$app" | xargs)  # trim
+            if [[ ! " $VALID_APPS " =~ " $app " ]]; then
+              echo "Invalid app: $app. Must be one of: $VALID_APPS" >&2
+              exit 1
+            fi
+          done
+          # 构建 matrix: 每个应用 x 每次迭代
+          matrix="$(jq -cn --argjson count "$ITERATIONS" --arg apps "$APPS" '
+            {include: [
+              ($apps | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $app_list |
+              range(1; $count + 1) as $i |
+              $app_list[] as $app |
+              {app: $app, i: $i}
+            ]}')"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "apps=$APPS" >> "$GITHUB_OUTPUT"
+          echo "Matrix entries: $(echo "$matrix" | jq '.include | length')"
+
+  test-windows:
+    needs: setup
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Download and verify ${{ matrix.app }} (iter ${{ matrix.i }})
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = '${{ matrix.app }}'
+          $iter = '${{ matrix.i }}'
+
+          # 应用 -> 下载端点映射
+          $endpoints = @{
+            'chatgpt' = 'https://codex.thz.quest/api/installer/download-chatgpt-win'
+            'claude'  = 'https://codex.thz.quest/api/installer/download-claude-setup-win'
+            'gemini'  = 'https://codex.thz.quest/api/installer/download-gemini-setup-win'
+          }
+          $url = $endpoints[$app]
+          if (-not $url) { throw "Unknown app: $app" }
+
+          $outFile = Join-Path $env:RUNNER_TEMP "thz-$app-$iter.exe"
+          $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+          try {
+            Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing -TimeoutSec 120
+          } catch {
+            Write-Error "DOWNLOAD_FAIL app=$app iter=$iter url=$url error=$($_.Exception.Message)"
+            throw
+          }
+          $stopwatch.Stop()
+          $elapsed = [math]::Round($stopwatch.Elapsed.TotalSeconds, 1)
+
+          # 验证文件
+          if (-not (Test-Path -LiteralPath $outFile -PathType Leaf)) {
+            throw "DOWNLOAD_FAIL app=$app iter=$iter: file not created"
+          }
+          $size = (Get-Item -LiteralPath $outFile).Length
+          if ($size -lt 10000) {
+            throw "DOWNLOAD_FAIL app=$app iter=$iter: file too small ($size bytes)"
+          }
+
+          # 验证 PE 头 (MZ)
+          $bytes = [System.IO.File]::ReadAllBytes($outFile)[0..1]
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            throw "DOWNLOAD_FAIL app=$app iter=$iter: not a valid PE executable (bad MZ header)"
+          }
+
+          Write-Host "PASS app=$app iter=$iter size=$size time=${elapsed}s"
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-fail-${{ matrix.app }}-${{ matrix.i }}
+          path: ${{ runner.temp }}/thz-${{ matrix.app }}-${{ matrix.i }}.exe
+          if-no-files-found: ignore
+          retention-days: 7
+
+  test-macos:
+    needs: setup
+    runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    steps:
+      - name: Download and verify ${{ matrix.app }} (iter ${{ matrix.i }})
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="${{ matrix.app }}"
+          ITER="${{ matrix.i }}"
+
+          # 应用 -> 下载端点映射 (Mac)
+          # 注意: ChatGPT 暂无 Mac 包，跳过
+          case "$APP" in
+            chatgpt)
+              echo "SKIP app=chatgpt: no Mac package available (endpoint returns 404)"
+              exit 0
+              ;;
+            claude)
+              URL="https://codex.thz.quest/api/installer/download-claude-mac"
+              EXPECT_EXT="dmg"
+              ;;
+            gemini)
+              URL="https://codex.thz.quest/api/installer/download-gemini-mac"
+              EXPECT_EXT="dmg"
+              ;;
+            *)
+              echo "Unknown app: $APP" >&2
+              exit 1
+              ;;
+          esac
+
+          OUT_FILE="${RUNNER_TEMP}/thz-${APP}-${ITER}.${EXPECT_EXT}"
+          START=$(date +%s)
+          HTTP_CODE=$(curl -sS -m 180 -o "$OUT_FILE" -w "%{http_code}" "$URL") || {
+            echo "DOWNLOAD_FAIL app=$APP iter=$ITER: curl failed" >&2
+            exit 1
+          }
+          END=$(date +%s)
+          ELAPSED=$((END - START))
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "DOWNLOAD_FAIL app=$APP iter=$ITER: HTTP $HTTP_CODE" >&2
+            exit 1
+          fi
+
+          if [ ! -f "$OUT_FILE" ]; then
+            echo "DOWNLOAD_FAIL app=$APP iter=$ITER: file not created" >&2
+            exit 1
+          fi
+
+          SIZE=$(stat -f%z "$OUT_FILE" 2>/dev/null || stat -c%s "$OUT_FILE")
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "DOWNLOAD_FAIL app=$APP iter=$ITER: file too small ($SIZE bytes)" >&2
+            exit 1
+          fi
+
+          # 验证 DMG 格式 (检查文件头)
+          FILE_TYPE=$(file -b "$OUT_FILE" | head -c 50)
+          echo "File type: $FILE_TYPE"
+
+          echo "PASS app=$APP iter=$ITER size=$SIZE time=${ELAPSED}s"
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-fail-${{ matrix.app }}-${{ matrix.i }}
+          path: ${{ runner.temp }}/thz-${{ matrix.app }}-${{ matrix.i }}.*
+          if-no-files-found: ignore
+          retention-days: 7
+
+  report:
+    needs:
+      - setup
+      - test-windows
+      - test-macos
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write test summary
+        shell: bash
+        env:
+          ITERATIONS: ${{ inputs.iterations }}
+          APPS: ${{ inputs.apps }}
+          WIN_RESULT: ${{ needs.test-windows.result }}
+          MAC_RESULT: ${{ needs.test-macos.result }}
+        run: |
+          {
+            echo "## 桌面应用下载测试汇总"
+            echo
+            echo "- 应用: ${APPS}"
+            echo "- 每应用迭代: ${ITERATIONS}"
+            echo "- Windows 结果: ${WIN_RESULT}"
+            echo "- Mac 结果: ${MAC_RESULT}"
+            echo
+            echo "失败的 job 会在 Artifacts 区留下文件 (win-fail-* / mac-fail-*)。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$WIN_RESULT" != "success" || "$MAC_RESULT" != "success" ]]; then
+            echo "有测试失败，详见上方 job 详情。"
+            exit 1
+          fi
+          echo "全部通过。"
