@@ -1095,43 +1095,51 @@ function Install-CodexCliFromOfficialStandalone {
     $useOfficialInstallProxy = $false
     $tcpClient = $null
 
-    try {
-        $tcpClient = New-Object System.Net.Sockets.TcpClient
-        $connectTask = $tcpClient.ConnectAsync(
-            'releases.openai.com',
-            443
-        )
+    # 优先复用 DOWNLOAD 阶段已验证可用的代理（TCP 探测在中国有假阳性：
+    # GFW 放行 TCP 握手但阻断/限速 HTTPS，大文件下载会卡死超时）
+    $proxyUrl = Get-TempProxyUrl
+    if (-not [string]::IsNullOrWhiteSpace($proxyUrl)) {
+        Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY reuse_existing_proxy=true'
+        $useOfficialInstallProxy = $true
+    } else {
+        try {
+            $tcpClient = New-Object System.Net.Sockets.TcpClient
+            $connectTask = $tcpClient.ConnectAsync(
+                'releases.openai.com',
+                443
+            )
 
-        if (-not $connectTask.Wait(8000)) {
-            throw 'TCP_CONNECT_TIMEOUT'
-        }
-
-        if (-not $tcpClient.Connected) {
-            throw 'TCP_CONNECT_FAILED'
-        }
-    } catch {
-        $proxyUrl = Get-TempProxyUrl
-        Write-Host ('stage=INSTALL operation=EMBEDDED_PROXY get_temp_proxy_url_result_empty={0}' -f ([string]::IsNullOrWhiteSpace($proxyUrl)))
-
-        # 若之前启动的代理已退出（或从未启动），主动（重）启动一次
-        if ([string]::IsNullOrWhiteSpace($proxyUrl)) {
-            try {
-                $proxyUrl = Start-EmbeddedProxy
-                Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY proxy_restart=success'
+            if (-not $connectTask.Wait(8000)) {
+                throw 'TCP_CONNECT_TIMEOUT'
             }
-            catch {
-                Write-Host ('stage=INSTALL operation=EMBEDDED_PROXY proxy_restart=failed error={0}' -f $_.Exception.Message)
-                $proxyUrl = $null
-            }
-        }
 
-        if (-not [string]::IsNullOrWhiteSpace($proxyUrl)) {
-            $useOfficialInstallProxy = $true
-        }
-    } finally {
-        if ($null -ne $tcpClient) {
-            $tcpClient.Dispose()
-            $tcpClient = $null
+            if (-not $tcpClient.Connected) {
+                throw 'TCP_CONNECT_FAILED'
+            }
+        } catch {
+            $proxyUrl = Get-TempProxyUrl
+            Write-Host ('stage=INSTALL operation=EMBEDDED_PROXY get_temp_proxy_url_result_empty={0}' -f ([string]::IsNullOrWhiteSpace($proxyUrl)))
+
+            # 若之前启动的代理已退出（或从未启动），主动（重）启动一次
+            if ([string]::IsNullOrWhiteSpace($proxyUrl)) {
+                try {
+                    $proxyUrl = Start-EmbeddedProxy
+                    Write-Host 'stage=INSTALL operation=EMBEDDED_PROXY proxy_restart=success'
+                }
+                catch {
+                    Write-Host ('stage=INSTALL operation=EMBEDDED_PROXY proxy_restart=failed error={0}' -f $_.Exception.Message)
+                    $proxyUrl = $null
+                }
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($proxyUrl)) {
+                $useOfficialInstallProxy = $true
+            }
+        } finally {
+            if ($null -ne $tcpClient) {
+                $tcpClient.Dispose()
+                $tcpClient = $null
+            }
         }
     }
 
