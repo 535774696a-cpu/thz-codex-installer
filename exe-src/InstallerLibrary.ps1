@@ -1148,8 +1148,12 @@ function Install-CodexCliFromOfficialStandalone {
         if ($useOfficialInstallProxy) {
             $escapedProxyUrl = $proxyUrl.Replace("'", "''")
             $proxyBootstrap = (
-                "try { [Net.WebRequest]::DefaultWebProxy = " +
-                "New-Object Net.WebProxy('$escapedProxyUrl') } catch {}`r`n"
+                "`$proxyUrl = '$escapedProxyUrl'`r`n" +
+                "try { `$p = New-Object Net.WebProxy(`$proxyUrl, `$true); `$p.BypassProxyOnLocal = `$true; [Net.WebRequest]::DefaultWebProxy = `$p } catch {}`r`n" +
+                "try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}`r`n" +
+                "`$env:HTTP_PROXY = `$proxyUrl; `$env:HTTPS_PROXY = `$proxyUrl; `$env:ALL_PROXY = `$proxyUrl`r`n" +
+                "`$env:http_proxy = `$proxyUrl; `$env:https_proxy = `$proxyUrl; `$env:all_proxy = `$proxyUrl`r`n" +
+                "`$env:NO_PROXY = 'localhost,127.0.0.1,::1'; `$env:no_proxy = `$env:NO_PROXY`r`n"
             )
             $proxyBootstrapBytes = [System.Text.Encoding]::UTF8.GetBytes(
                 $proxyBootstrap
@@ -1194,9 +1198,11 @@ function Install-CodexCliFromOfficialStandalone {
         $info.RedirectStandardError = $true
         $info.EnvironmentVariables['CODEX_NON_INTERACTIVE'] = '1'
         if ($useOfficialInstallProxy) {
-            $info.EnvironmentVariables['HTTPS_PROXY'] = $proxyUrl
-            $info.EnvironmentVariables['HTTP_PROXY'] = $proxyUrl
-            $info.EnvironmentVariables['NO_PROXY'] = 'localhost,127.0.0.1'
+            foreach ($n in @('HTTPS_PROXY','HTTP_PROXY','ALL_PROXY','https_proxy','http_proxy','all_proxy')) {
+                $info.EnvironmentVariables[$n] = $proxyUrl
+            }
+            $info.EnvironmentVariables['NO_PROXY'] = 'localhost,127.0.0.1,::1'
+            $info.EnvironmentVariables['no_proxy'] = 'localhost,127.0.0.1,::1'
         }
         $proc = New-Object Diagnostics.Process
         $proc.StartInfo = $info
@@ -1211,6 +1217,11 @@ function Install-CodexCliFromOfficialStandalone {
             $stdout = $stdoutTask.Result
             $stderr = $stderrTask.Result
             Write-InstallProcessEvent -State 'install_process_failed' -TimedOut $true -ExceptionType 'System.TimeoutException' -Stdout $stdout -Stderr $stderr
+            if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+                Write-Host '----- Official installer stdout on timeout (last 2000 chars) -----'
+                $s2 = [string]$stdout
+                Write-Host $s2.Substring([Math]::Max(0, $s2.Length - 2000))
+            }
             $script:diagnosticCode = 'OFFICIAL_INSTALL_TIMEOUT'
             throw 'OFFICIAL_INSTALL_TIMEOUT'
         }
@@ -1219,6 +1230,17 @@ function Install-CodexCliFromOfficialStandalone {
         $stderr = $stderrTask.Result
         if ($proc.ExitCode -ne 0) {
             Write-InstallProcessEvent -State 'install_process_failed' -ExitCode ([string]$proc.ExitCode) -ExceptionType 'System.InvalidOperationException' -Stdout $stdout -Stderr $stderr
+            Write-Host ('official_install_exit_code={0}' -f $proc.ExitCode)
+            if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+                Write-Host '----- Official installer stdout (last 3000 chars) -----'
+                $s = [string]$stdout
+                Write-Host $s.Substring([Math]::Max(0, $s.Length - 3000))
+            }
+            if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+                Write-Host '----- Official installer stderr (last 3000 chars) -----'
+                $e = [string]$stderr
+                Write-Host $e.Substring([Math]::Max(0, $e.Length - 3000))
+            }
             # 仅当 THZ 用预期绝对路径再次验证 codex.exe --version 成功时继续；
             # PATH/config/final verify 仍在后续强制执行。
             $installedVersion = $null
