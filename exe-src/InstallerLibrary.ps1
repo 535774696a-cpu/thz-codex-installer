@@ -163,6 +163,11 @@ function ConvertFrom-Hysteria2Uri {
             $obfsPassword = [string]$queryValues['obfs-password']
         }
 
+        $mportRange = ''
+        if ($queryValues.ContainsKey('mport')) {
+            $mportRange = [string]$queryValues['mport']
+        }
+
         if ([string]::IsNullOrWhiteSpace($name)) {
             $name = '{0}:{1}' -f $server, $parsedUri.Port
         }
@@ -175,6 +180,7 @@ function ConvertFrom-Hysteria2Uri {
             Insecure     = [bool]$insecure
             ObfsType     = $obfsType
             ObfsPassword = $obfsPassword
+            MportRange   = $mportRange
             Name         = $name
         }
     }
@@ -410,8 +416,12 @@ function Start-EmbeddedProxy {
             # 参考: https://v2.hysteria.network/docs/advanced/Client-Configuration/
             $yamlLines = New-Object System.Collections.Generic.List[string]
 
-            # server: "host:port"
-            $yamlLines.Add(('server: "{0}:{1}"' -f $selectedNode.Server, $selectedNode.ServerPort))
+            # server: "host:port" 或 "host:mport-range"（端口跳跃）
+            $serverPortPart = $selectedNode.ServerPort
+            if (-not [string]::IsNullOrWhiteSpace([string]$selectedNode.MportRange)) {
+                $serverPortPart = ([string]$selectedNode.MportRange).Trim()
+            }
+            $yamlLines.Add(('server: "{0}:{1}"' -f $selectedNode.Server, $serverPortPart))
             # auth: password
             $yamlLines.Add(('auth: "{0}"' -f $selectedNode.Password.Replace('"', '\"')))
             # tls
@@ -424,11 +434,12 @@ function Start-EmbeddedProxy {
             # http inbound
             $yamlLines.Add('http:')
             $yamlLines.Add(('  listen: "127.0.0.1:{0}"' -f $httpPort))
-            # obfs (salamander)
+            # obfs (salamander) - 密码必须在 salamander 子节下
             if ($selectedNode.ObfsType -eq 'salamander') {
                 $yamlLines.Add('obfs:')
                 $yamlLines.Add('  type: "salamander"')
-                $yamlLines.Add(('  password: "{0}"' -f $selectedNode.ObfsPassword.Replace('"', '\"')))
+                $yamlLines.Add('  salamander:')
+                $yamlLines.Add(('    password: "{0}"' -f $selectedNode.ObfsPassword.Replace('"', '\"')))
             }
 
             [IO.File]::WriteAllText(
