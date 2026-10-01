@@ -426,6 +426,7 @@ Add-Type -AssemblyName System.Drawing
         if ($existing.Status -ne 'standalone') {$null=Install-CodexCliFromOfficialStandalone -InstallerPayload $payload}
     } else {
         Set-DiagnosticStage 'INSTALL' 'DESKTOP_INSTALL_FAILED'
+        $script:InstallStartTime=Get-Date
         $desktopPackage=Install-OfficialCodexDesktop
         $desktopAppId=Test-OfficialCodexDesktopRegistration
     }
@@ -444,6 +445,8 @@ Add-Type -AssemblyName System.Drawing
         $dvalues=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;AppId=[string]$verifyPkg.PackageFamilyName}
         foreach($name in $dvalues.Keys){$node=$proof.CreateElement($name);$node.InnerText=$dvalues[$name];$null=$root.AppendChild($node)}
         $proof.Save((Join-Path $PSScriptRoot 'verification.xml'))
+        $totalElapsed=(Get-Date)-$script:InstallStartTime
+        Write-Host ("安装成功！总用时 {0}（下载 {1} 秒，安装 {2} 秒）" -f (Format-Duration $totalElapsed), $desktopPackage.DownloadSeconds, $desktopPackage.InstallSeconds)
     } else {
         Set-DiagnosticStage 'CONFIG' 'LOCAL_CONFIG_FAILED'
         $homePath=Get-CodexHome

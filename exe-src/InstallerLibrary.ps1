@@ -1573,6 +1573,122 @@ function Test-ConfigWritten {
 # 不修改 config.toml。登录完全由用户在 OpenAI 官方 Desktop App / 官网
 # 流程中自行完成，本安装器不采集任何凭据。
 
+function Start-ProgressSpinner {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+
+    $spinner = @{
+        Runspace = $null
+        PowerShell = $null
+        AsyncResult = $null
+        Message = $Message
+        StartTime = Get-Date
+        IsAnimated = $false
+        Succeeded = $false
+    }
+
+    if ($Message -eq '正在下载 ChatGPT Desktop 安装包...') {
+        $spinner.CompletionMessage = '下载完成'
+    } elseif ($Message -eq '正在安装 ChatGPT Desktop...') {
+        $spinner.CompletionMessage = '安装完成'
+    } else {
+        $spinner.CompletionMessage = '操作完成'
+    }
+
+    if (-not [Environment]::UserInteractive -or [Console]::IsOutputRedirected) {
+        Write-Host $Message
+        return $spinner
+    }
+
+    $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $runspace.Open()
+
+    $powershell = [PowerShell]::Create()
+    $powershell.Runspace = $runspace
+
+    $scriptBlock = {
+        param($SpinnerMessage)
+
+        $frames = @('|', '/', '-', '\')
+        $frameIndex = 0
+
+        while ($true) {
+            $frame = $frames[$frameIndex % $frames.Count]
+            [Console]::Write(("`r{0} {1}" -f $frame, $SpinnerMessage))
+            $frameIndex++
+            Start-Sleep -Milliseconds 500
+        }
+    }
+
+    $null = $powershell.AddScript($scriptBlock).AddArgument($Message)
+    $asyncResult = $powershell.BeginInvoke()
+
+    $spinner.Runspace = $runspace
+    $spinner.PowerShell = $powershell
+    $spinner.AsyncResult = $asyncResult
+    $spinner.IsAnimated = $true
+
+    return $spinner
+}
+
+function Stop-ProgressSpinner {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Spinner
+    )
+
+    try {
+        if ($Spinner.IsAnimated -and $null -ne $Spinner.PowerShell) {
+            if ($null -ne $Spinner.AsyncResult -and -not $Spinner.AsyncResult.IsCompleted) {
+                $Spinner.PowerShell.Stop()
+            }
+
+            if ($null -ne $Spinner.AsyncResult) {
+                try {
+                    $Spinner.PowerShell.EndInvoke($Spinner.AsyncResult)
+                } catch [System.Management.Automation.PipelineStoppedException] {
+                }
+            }
+        }
+    } finally {
+        if ($null -ne $Spinner.PowerShell) {
+            $Spinner.PowerShell.Dispose()
+        }
+        if ($null -ne $Spinner.Runspace) {
+            $Spinner.Runspace.Dispose()
+        }
+
+        if ($Spinner.IsAnimated) {
+            $clearLength = ([string]$Spinner.Message).Length + 4
+            [Console]::Write(("`r{0}`r" -f (' ' * $clearLength)))
+        }
+    }
+
+    if ($Spinner.Succeeded) {
+        $elapsed = (Get-Date) - $Spinner.StartTime
+        Write-Ok ("{0}，用时 {1}" -f $Spinner.CompletionMessage, (Format-Duration $elapsed))
+    }
+}
+
+function Format-Duration {
+    param(
+        [Parameter(Mandatory = $true)]
+        [TimeSpan]$Ts
+    )
+
+    $totalSeconds = [int][Math]::Floor($Ts.TotalSeconds)
+    $minutes = [int][Math]::Floor($totalSeconds / 60)
+    $seconds = $totalSeconds % 60
+
+    if ($minutes -gt 0) {
+        return ('{0} 分 {1} 秒' -f $minutes, $seconds)
+    }
+
+    return ('{0} 秒' -f $seconds)
+}
+
 function Install-OfficialCodexDesktop {
     $processorArch = [string]$env:PROCESSOR_ARCHITECTURE
     if ($processorArch -eq 'ARM64') {
@@ -1590,27 +1706,35 @@ function Install-OfficialCodexDesktop {
     }
     $msixPath = Join-Path $downloadDir "ChatGPT-$arch.msix"
 
-    Write-Ok '正在下载 ChatGPT Desktop 安装包...'
+    $downloadStart = Get-Date
+    $downloadSpinner = Start-ProgressSpinner -Message '正在下载 ChatGPT Desktop 安装包...'
     try {
-        $resp = Invoke-ForeignWebRequest -Uri $url -TimeoutSec 300
-        $fileStream = $null
         try {
-            $fileStream = [IO.File]::Create($msixPath)
-            if ($null -ne $resp.RawContentStream) {
-                $resp.RawContentStream.Position = 0
-                $resp.RawContentStream.CopyTo($fileStream)
-            } else {
-                $bytes = [Text.Encoding]::GetEncoding('iso-8859-1').GetBytes([string]$resp.Content)
-                $fileStream.Write($bytes, 0, $bytes.Length)
+            $resp = Invoke-ForeignWebRequest -Uri $url -TimeoutSec 300
+            $fileStream = $null
+            try {
+                $fileStream = [IO.File]::Create($msixPath)
+                if ($null -ne $resp.RawContentStream) {
+                    $resp.RawContentStream.Position = 0
+                    $resp.RawContentStream.CopyTo($fileStream)
+                } else {
+                    $bytes = [Text.Encoding]::GetEncoding('iso-8859-1').GetBytes([string]$resp.Content)
+                    $fileStream.Write($bytes, 0, $bytes.Length)
+                }
+            } finally {
+                if ($null -ne $fileStream) {
+                    $fileStream.Dispose()
+                }
             }
-        } finally {
-            if ($null -ne $fileStream) {
-                $fileStream.Dispose()
-            }
+            $downloadSpinner.Succeeded = $true
+        } catch {
+            throw 'DESKTOP_DOWNLOAD_FAILED'
         }
-    } catch {
-        throw 'DESKTOP_DOWNLOAD_FAILED'
+    } finally {
+        Stop-ProgressSpinner -Spinner $downloadSpinner
     }
+    $downloadEnd = Get-Date
+    $downloadElapsed = $downloadEnd - $downloadStart
 
     Write-Ok '正在校验 ChatGPT Desktop 安装包...'
     if (-not (Test-Path -LiteralPath $msixPath -PathType Leaf)) {
@@ -1637,18 +1761,29 @@ function Install-OfficialCodexDesktop {
         throw 'DESKTOP_MSIX_FORMAT_INVALID'
     }
 
-    Write-Ok '正在安装 ChatGPT Desktop...'
+    $installStart = Get-Date
+    $installSpinner = Start-ProgressSpinner -Message '正在安装 ChatGPT Desktop...'
     try {
-        Add-AppxPackage -Path $msixPath -ErrorAction Stop
-    } catch {
-        throw 'DESKTOP_APPX_INSTALL_FAILED'
+        try {
+            Add-AppxPackage -Path $msixPath -ErrorAction Stop
+            $installSpinner.Succeeded = $true
+        } catch {
+            throw 'DESKTOP_APPX_INSTALL_FAILED'
+        }
+    } finally {
+        Stop-ProgressSpinner -Spinner $installSpinner
     }
+    $installEnd = Get-Date
+    $installElapsed = $installEnd - $installStart
     Write-Ok 'ChatGPT Desktop 安装完成。'
+    Write-Host ("stage=INSTALL operation=DESKTOP_TIMING download_seconds={0} install_seconds={1}" -f [int]$downloadElapsed.TotalSeconds, [int]$installElapsed.TotalSeconds)
 
     return @{
         MsixPath = $msixPath
         Arch = $arch
         SizeBytes = $size
+        DownloadSeconds = [int]$downloadElapsed.TotalSeconds
+        InstallSeconds = [int]$installElapsed.TotalSeconds
     }
 }
 
