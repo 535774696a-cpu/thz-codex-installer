@@ -98,17 +98,17 @@ jobs:
 
           # 验证文件
           if (-not (Test-Path -LiteralPath $outFile -PathType Leaf)) {
-            throw "DOWNLOAD_FAIL app=$app iter=$iter: file not created"
+            throw "DOWNLOAD_FAIL app=$app iter=${iter}: file not created"
           }
           $size = (Get-Item -LiteralPath $outFile).Length
           if ($size -lt 10000) {
-            throw "DOWNLOAD_FAIL app=$app iter=$iter: file too small ($size bytes)"
+            throw "DOWNLOAD_FAIL app=$app iter=${iter}: file too small ($size bytes)"
           }
 
           # 验证 PE 头 (MZ)
           $bytes = [System.IO.File]::ReadAllBytes($outFile)[0..1]
           if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
-            throw "DOWNLOAD_FAIL app=$app iter=$iter: not a valid PE executable (bad MZ header)"
+            throw "DOWNLOAD_FAIL app=$app iter=${iter}: not a valid PE executable (bad MZ header)"
           }
 
           Write-Host "PASS app=$app iter=$iter size=$size time=${elapsed}s"
