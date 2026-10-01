@@ -19,6 +19,15 @@ on:
         required: true
         default: 'chatgpt,claude,gemini'
         type: string
+      platform:
+        description: '测试哪个平台'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - windows
+          - macos
 
 jobs:
   setup:
@@ -77,6 +86,7 @@ jobs:
 
   test-windows:
     needs: setup
+    if: ${{ inputs.platform == 'both' || inputs.platform == 'windows' }}
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
@@ -154,8 +164,9 @@ jobs:
 
   test-macos:
     needs: setup
+    if: ${{ inputs.platform == 'both' || inputs.platform == 'macos' }}
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -195,7 +206,8 @@ jobs:
           fail=0
           for (( i=START; i<=END; i++ )); do
             OUT_FILE="${RUNNER_TEMP}/thz-${APP}-${i}.${EXPECT_EXT}"
-            if ! HTTP_CODE=$(curl -sS -m 180 -o "$OUT_FILE" -w "%{http_code}" "$URL"); then
+            # Claude Mac DMG 约 376MB，runner 下载慢时 180s 不够；加重试应对瞬时 DNS/网络故障
+            if ! HTTP_CODE=$(curl -sS -m 600 --retry 3 --retry-delay 10 --retry-all-errors -o "$OUT_FILE" -w "%{http_code}" "$URL"); then
               echo "FAIL app=$APP iter=$i: curl failed"
               fail=$((fail+1))
               continue
@@ -265,7 +277,8 @@ jobs:
             echo "失败的 job 会在 Artifacts 区留下文件 (win-fail-* / mac-fail-*)。"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [[ "$WIN_RESULT" != "success" || "$MAC_RESULT" != "success" ]]; then
+          if [[ "$WIN_RESULT" != "success" && "$WIN_RESULT" != "skipped" ]] || \
+             [[ "$MAC_RESULT" != "success" && "$MAC_RESULT" != "skipped" ]]; then
             echo "有测试失败 (win=${WIN_RESULT}, mac=${MAC_RESULT})，详见上方 job 详情。"
             exit 1
           fi
