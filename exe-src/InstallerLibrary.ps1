@@ -1229,9 +1229,18 @@ function Install-CodexCliFromOfficialStandalone {
             }
             # 仅当 THZ 用预期绝对路径再次验证 codex.exe --version 成功时继续；
             # PATH/config/final verify 仍在后续强制执行。
+            # 注意：官方脚本可能因 codex.exe 自身的 benign WARNING（stderr 清理
+            # 临时目录失败）而 exit 1；且刚落盘的 exe 可能被短暂锁定/扫描。
+            # 因此兜底验证带重试，而不是一次失败就判整个 INSTALL 失败。
             $installedVersion = $null
             if (Test-Path -LiteralPath $StandaloneExe -PathType Leaf) {
-                try { $installedVersion = Invoke-CodexProbe -Command $StandaloneExe -TimeoutSec 20 } catch {}
+                for ($pvAttempt = 1; $pvAttempt -le 4; $pvAttempt++) {
+                    try { $installedVersion = Invoke-CodexProbe -Command $StandaloneExe -TimeoutSec 30 } catch {
+                        Write-Host ('stage=INSTALL operation=OFFICIAL_VERIFY attempt={0} error={1}' -f $pvAttempt, $_.Exception.Message)
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($installedVersion)) { break }
+                    Start-Sleep -Seconds 5
+                }
             }
             if ([string]::IsNullOrWhiteSpace($installedVersion)) { throw 'OFFICIAL_INSTALL_FAILED' }
             Write-Warn '官方安装器末端验证返回非零，已通过 standalone 绝对路径验证；继续完成 PATH 与最终验证。'
