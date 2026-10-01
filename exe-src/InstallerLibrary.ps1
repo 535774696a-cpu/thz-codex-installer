@@ -2002,7 +2002,29 @@ function Invoke-ChatGPTDeepSeekOptionalSetup {
 
 function Start-ChatGPTDesktopApp {
     param([string]$PackageFamilyName)
-    Start-Process "shell:AppsFolder\$PackageFamilyName!App"
+
+    $pkg = Get-AppxPackage |
+        Where-Object { $_.PackageFamilyName -eq $PackageFamilyName } |
+        Select-Object -First 1
+
+    if (-not $pkg) {
+        Start-Process "shell:AppsFolder\$PackageFamilyName!App"
+        return
+    }
+
+    $appId = 'App'
+    try {
+        [xml]$xml = Get-Content -LiteralPath (Join-Path $pkg.InstallLocation 'AppxManifest.xml')
+        $manifestAppId = [string]$xml.Package.Applications.Application[0].Id
+        if (-not [string]::IsNullOrWhiteSpace($manifestAppId)) {
+            $appId = $manifestAppId
+        }
+    }
+    catch {
+        $appId = 'App'
+    }
+
+    Start-Process "shell:AppsFolder\$PackageFamilyName!$appId"
 }
 
 # =====================================================================

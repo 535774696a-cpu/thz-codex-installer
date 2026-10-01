@@ -362,6 +362,7 @@ function Get-FailStepForPhase {
         'PACKAGE_VERIFY' { return 5 }  # [5/7] 安装包校验
         'EXTRACT'        { return 5 }  #        资源解包
         'CODEX_VERIFY'   { return 6 }  # [6/7] 验证 Codex
+        'DESKTOP_VERIFY' { return 6 }  # [6/7] 验证桌面应用
         default          { return 1 }  # 未知阶段：归入最早桶，error_code 保留真实阶段
     }
 }
@@ -442,11 +443,16 @@ Add-Type -AssemblyName System.Drawing
         catch {
         }
         # VERIFY 阶段：确认 Appx 包仍存在
-        Set-DiagnosticStage 'CODEX_VERIFY' 'CODEX_VERSION_OR_CONFIG_FAILED'
+        Set-DiagnosticStage 'DESKTOP_VERIFY' 'DESKTOP_VERIFY_FAILED'
         $verifyPkg=Test-OfficialCodexDesktopRegistration
         $version=[string]$verifyPkg.Version
-        # 启动应用
-        Start-ChatGPTDesktopApp -PackageFamilyName $verifyPkg.PackageFamilyName
+        # 启动应用（best-effort：失败不影响安装结果，只记 warning）
+        try {
+            Start-ChatGPTDesktopApp -PackageFamilyName $verifyPkg.PackageFamilyName
+        }
+        catch {
+            Write-Host 'stage=DESKTOP_VERIFY operation=APP_LAUNCH result=failed_nonfatal'
+        }
         # verification.xml（desktop 简化版：只含 Version/ClientType/ProviderType/AppId）
         $proof=New-Object Xml.XmlDocument;$root=$proof.CreateElement('Verification');$null=$proof.AppendChild($root)
         $dvalues=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;AppId=[string]$verifyPkg.PackageFamilyName}
@@ -496,7 +502,7 @@ Add-Type -AssemblyName System.Drawing
     exit 0
 } catch {
     # Only fixed codes and exception type; never exception messages, bodies or invocation data.
-    $known=@('CONFIG_HOME_INVALID','INSTALLATION_TICKET_INVALID','INSTALL_PLAN_MISMATCH','EXISTING_CODEX_CONFLICT','PROVIDER_INVALID','CONFIG_LOCATION_INVALID','CONFIG_INVALID','MODEL_INVALID','PROVIDER_URL_INVALID','CATALOG_PATH_INVALID','MODEL_CATALOG_INVALID','KEY_INPUT_CANCELLED','KEY_VALIDATION_FAILED','KEY_ATTEMPTS_EXHAUSTED','VERIFY_EXECUTABLE_MISSING','VERIFY_START_FAILED','VERIFY_TIMEOUT','VERIFY_EXIT_CODE','VERIFY_INVALID_VERSION','OFFICIAL_INSTALL_START_FAILED','OFFICIAL_INSTALL_TIMEOUT','OFFICIAL_INSTALL_FAILED','OFFICIAL_INSTALL_OUTPUT_MISSING','DESKTOP_ARCH_UNSUPPORTED','DESKTOP_SOURCE_INVALID','DESKTOP_DOWNLOAD_FAILED','DESKTOP_PACKAGE_TOO_SMALL','DESKTOP_MSIX_FORMAT_INVALID','DESKTOP_PACKAGE_IDENTITY_INVALID','DESKTOP_SIGNATURE_INVALID','DESKTOP_PUBLISHER_INVALID','DESKTOP_APPX_UNAVAILABLE','DESKTOP_APPX_INSTALL_FAILED','DESKTOP_ARCH_MISMATCH','DESKTOP_PACKAGE_VERIFY_FAILED','DESKTOP_APP_REGISTRATION_MISSING')
+    $known=@('CONFIG_HOME_INVALID','INSTALLATION_TICKET_INVALID','INSTALL_PLAN_MISMATCH','EXISTING_CODEX_CONFLICT','PROVIDER_INVALID','CONFIG_LOCATION_INVALID','CONFIG_INVALID','MODEL_INVALID','PROVIDER_URL_INVALID','CATALOG_PATH_INVALID','MODEL_CATALOG_INVALID','KEY_INPUT_CANCELLED','KEY_VALIDATION_FAILED','KEY_ATTEMPTS_EXHAUSTED','VERIFY_EXECUTABLE_MISSING','VERIFY_START_FAILED','VERIFY_TIMEOUT','VERIFY_EXIT_CODE','VERIFY_INVALID_VERSION','OFFICIAL_INSTALL_START_FAILED','OFFICIAL_INSTALL_TIMEOUT','OFFICIAL_INSTALL_FAILED','OFFICIAL_INSTALL_OUTPUT_MISSING','DESKTOP_ARCH_UNSUPPORTED','DESKTOP_SOURCE_INVALID','DESKTOP_DOWNLOAD_FAILED','DESKTOP_PACKAGE_TOO_SMALL','DESKTOP_MSIX_FORMAT_INVALID','DESKTOP_PACKAGE_IDENTITY_INVALID','DESKTOP_SIGNATURE_INVALID','DESKTOP_PUBLISHER_INVALID','DESKTOP_APPX_UNAVAILABLE','DESKTOP_APPX_INSTALL_FAILED','DESKTOP_ARCH_MISMATCH','DESKTOP_PACKAGE_VERIFY_FAILED','DESKTOP_APP_REGISTRATION_MISSING','DESKTOP_VERIFY_FAILED')
     if ($script:phase -notlike 'LICENSE_*' -and $known -contains $_.Exception.Message) { $script:diagnosticCode=$_.Exception.Message }
     # P0-2: 上报失败到服务端（仅固定阶段码与诊断码，不含异常原文；上报失败不影响退出流程）
     try { Invoke-InstallFailReport } catch { }
