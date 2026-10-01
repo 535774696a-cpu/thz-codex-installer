@@ -1111,6 +1111,7 @@ function Install-CodexCliFromOfficialStandalone {
         }
     } catch {
         $proxyUrl = Get-TempProxyUrl
+        Write-Host ('stage=INSTALL operation=EMBEDDED_PROXY get_temp_proxy_url_result_empty={0}' -f ([string]::IsNullOrWhiteSpace($proxyUrl)))
 
         # 若之前启动的代理已退出（或从未启动），主动（重）启动一次
         if ([string]::IsNullOrWhiteSpace($proxyUrl)) {
