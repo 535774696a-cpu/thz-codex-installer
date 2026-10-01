@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$BaseUrl = 'https://thz.quest',
+    [string]$BaseUrl = 'https://codex.thz.quest',
     [string]$OutDir = (Join-Path $PSScriptRoot 'dist'),
     [switch]$TestHook
 )

@@ -72,8 +72,14 @@ jobs:
       - name: Compile
         run: |
           $ErrorActionPreference = 'Stop'
-          $mode = '${{ inputs.mode }}'
-          if (-not $mode) { $mode = 'test' }
+          $eventName = '${{ github.event_name }}'
+          if ($eventName -eq 'workflow_dispatch') {
+            $mode = '${{ inputs.mode }}'
+          } elseif ($eventName -eq 'push') {
+            $mode = 'production'
+          } else {
+            $mode = 'test'
+          }
           if ($mode -eq 'production') {
             Write-Host 'Production build: BaseUrl=https://codex.thz.quest, no TestHook'
             .\exe-src\build.ps1 -BaseUrl 'https://codex.thz.quest' -OutDir (Join-Path $PWD 'dist')
