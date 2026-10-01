@@ -1144,9 +1144,15 @@ function Install-CodexCliFromOfficialStandalone {
     }
 
         $scriptBytes = [byte[]]$InstallerPayload.Bytes
+        $proxyBootstrap = ''
 
         if ($useOfficialInstallProxy) {
             $escapedProxyUrl = $proxyUrl.Replace("'", "''")
+            # 注意：绝不能把 bootstrap 字节拼在官方脚本前面——官方脚本以
+            # [CmdletBinding()] param() 开头，PS 5.1 要求它们必须是脚本首语句，
+            # 前置可执行语句会导致解析失败（UnexpectedAttribute，exit 1）。
+            # 改为：官方脚本原样落盘，bootstrap 经 -EncodedCommand 在同一进程
+            # 先执行，再 & 调用官方脚本文件。
             $proxyBootstrap = (
                 "`$proxyUrl = '$escapedProxyUrl'`r`n" +
                 "try { `$p = New-Object Net.WebProxy(`$proxyUrl, `$true); `$p.BypassProxyOnLocal = `$true; [Net.WebRequest]::DefaultWebProxy = `$p } catch {}`r`n" +
@@ -1155,29 +1161,6 @@ function Install-CodexCliFromOfficialStandalone {
                 "`$env:http_proxy = `$proxyUrl; `$env:https_proxy = `$proxyUrl; `$env:all_proxy = `$proxyUrl`r`n" +
                 "`$env:NO_PROXY = 'localhost,127.0.0.1,::1'; `$env:no_proxy = `$env:NO_PROXY`r`n"
             )
-            $proxyBootstrapBytes = [System.Text.Encoding]::UTF8.GetBytes(
-                $proxyBootstrap
-            )
-            $combinedBytes = New-Object byte[] (
-                $proxyBootstrapBytes.Length + $scriptBytes.Length
-            )
-
-            [Array]::Copy(
-                $proxyBootstrapBytes,
-                0,
-                $combinedBytes,
-                0,
-                $proxyBootstrapBytes.Length
-            )
-            [Array]::Copy(
-                $scriptBytes,
-                0,
-                $combinedBytes,
-                $proxyBootstrapBytes.Length,
-                $scriptBytes.Length
-            )
-
-            $scriptBytes = $combinedBytes
             Write-Host 'official_install_proxy=on'
         } else {
             Write-Host 'official_install_proxy=off'
@@ -1187,7 +1170,10 @@ function Install-CodexCliFromOfficialStandalone {
 
         Write-Host '    正在通过 OpenAI 官方安装器安装 Codex（下载约 130MB，请稍候）…'
         # 官方非交互模式只作用于该子进程；不写 User/System Environment。
-        $inner = '& "' + $tmp + '"'
+        # 官方脚本保持原样（其首语句 [CmdletBinding()]param() 不可被前置语句破坏）；
+        # 代理 bootstrap（如有）通过 EncodedCommand 在同一进程先执行，再 & 调用官方脚本。
+        $escapedTmp = $tmp.Replace("'", "''")
+        $inner = $proxyBootstrap + "& '$escapedTmp'"
         $enc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($inner))
         $info = New-Object Diagnostics.ProcessStartInfo
         $info.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
