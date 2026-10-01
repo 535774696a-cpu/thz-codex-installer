@@ -50,6 +50,25 @@ function Write-LicenseRequestEvent {
         [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
     } catch {}
 }
+function Wait-HttpOperation {
+    param(
+        [Parameter(Mandatory=$true)][IAsyncResult]$AsyncResult,
+        [Parameter(Mandatory=$true)][Net.HttpWebRequest]$Request,
+        [Parameter(Mandatory=$true)][Diagnostics.Stopwatch]$Clock,
+        [Parameter(Mandatory=$true)][int]$TimeoutMs,
+        [Parameter(Mandatory=$true)][string]$Phase
+    )
+
+    $remaining = [int64]$TimeoutMs - $Clock.ElapsedMilliseconds
+    if ($remaining -le 0 -or
+        -not $AsyncResult.AsyncWaitHandle.WaitOne([int]$remaining)) {
+        $Request.Abort()
+        throw (New-Object System.TimeoutException(
+            "HTTP request timed out after ${TimeoutMs}ms; phase=$Phase"
+        ))
+    }
+}
+
 function Invoke-LicenseRequest {
     param([string]$Operation,[string]$Path,[string]$Body,[int]$TimeoutSec)
 
@@ -63,38 +82,95 @@ function Invoke-LicenseRequest {
     }
 
     Set-DiagnosticStage $Operation ($Operation+'_FAILED')
-    Write-LicenseRequestEvent -Operation $Operation -State 'request_started' -Path $Path
+
+    # 原 Write-LicenseRequestEvent 本身会阻塞，不能放在请求关键路径。
+    # 如必须保留，请将其实现改成纯本地、非阻塞日志。
+    Write-Information (
+        "license_request operation=$Operation state=request_started path=$Path"
+    ) -InformationAction Continue
+
     $requestId = [Guid]::NewGuid().ToString('N')
+    $timeoutMs = [Math]::Max(1, $TimeoutSec) * 1000
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $request = $null
+    $requestStream = $null
+    $response = $null
+    $responseStream = $null
+    $responseBuffer = $null
 
     try {
         $request = [Net.HttpWebRequest]::Create("$BASE_URL$Path")
         $request.Method = 'POST'
         $request.ContentType = 'application/json'
         $request.Proxy = $null
-        $request.Timeout = $TimeoutSec * 1000
+        $request.Timeout = $timeoutMs
+        $request.ReadWriteTimeout = $timeoutMs
         $request.Headers['X-THZ-Request-ID'] = $requestId
         $request.Headers['X-THZ-Installer-Version'] = [string]$script:InstallerVersion
 
         $requestBytes = [Text.Encoding]::UTF8.GetBytes([string]$Body)
         $request.ContentLength = $requestBytes.Length
-        $requestStream = $null
+
+        # DNS/connect/TLS/request-stream：使用剩余总时间。
+        $async = $request.BeginGetRequestStream($null, $null)
         try {
-            $requestStream = $request.GetRequestStream()
-            $requestStream.Write($requestBytes, 0, $requestBytes.Length)
-        } finally {
-            if ($null -ne $requestStream) { $requestStream.Dispose() }
+            Wait-HttpOperation $async $request $clock $timeoutMs 'GET_REQUEST_STREAM'
+            $requestStream = $request.EndGetRequestStream($async)
+        }
+        finally {
+            $async.AsyncWaitHandle.Close()
         }
 
-        $response = $null
-        $reader = $null
+        # 请求体写入也受同一个硬期限约束。
+        $async = $requestStream.BeginWrite(
+            $requestBytes, 0, $requestBytes.Length, $null, $null
+        )
         try {
-            $response = [Net.HttpWebResponse]$request.GetResponse()
-            $reader = New-Object IO.StreamReader($response.GetResponseStream())
-            $responseBody = $reader.ReadToEnd()
-        } finally {
-            if ($null -ne $reader) { $reader.Dispose() }
-            if ($null -ne $response) { $response.Dispose() }
+            Wait-HttpOperation $async $request $clock $timeoutMs 'WRITE_REQUEST_BODY'
+            $requestStream.EndWrite($async)
         }
+        finally {
+            $async.AsyncWaitHandle.Close()
+            $requestStream.Dispose()
+            $requestStream = $null
+        }
+
+        # 等待响应。
+        $async = $request.BeginGetResponse($null, $null)
+        try {
+            Wait-HttpOperation $async $request $clock $timeoutMs 'GET_RESPONSE'
+            $response = [Net.HttpWebResponse]$request.EndGetResponse($async)
+        }
+        finally {
+            $async.AsyncWaitHandle.Close()
+        }
+
+        # 响应体读取同样受总期限约束。
+        $responseStream = $response.GetResponseStream()
+        $responseBuffer = New-Object IO.MemoryStream
+        $buffer = New-Object byte[] 8192
+
+        while ($true) {
+            $async = $responseStream.BeginRead(
+                $buffer, 0, $buffer.Length, $null, $null
+            )
+            try {
+                Wait-HttpOperation $async $request $clock $timeoutMs 'READ_RESPONSE'
+                $count = $responseStream.EndRead($async)
+            }
+            finally {
+                $async.AsyncWaitHandle.Close()
+            }
+
+            if ($count -eq 0) {
+                break
+            }
+            $responseBuffer.Write($buffer, 0, $count)
+        }
+
+        $responseBody = [Text.Encoding]::UTF8.GetString(
+            $responseBuffer.ToArray()
+        )
 
         $result = $responseBody | ConvertFrom-Json
         $state=if($null -ne $result -and $result.ok -eq $true){'request_completed'}else{'request_failed'}
@@ -102,6 +178,9 @@ function Invoke-LicenseRequest {
         Write-LicenseRequestEvent -Operation $Operation -State $state -Path $Path -Received $true -ServerCode $safeCode
         return $result
     } catch {
+        if ($null -ne $request) {
+            $request.Abort()
+        }
         $record=$_; $status='NONE';$received=$false;$type=$record.Exception.GetType().FullName;$safeCode='NONE'
         $state='request_failed'
         $errorResponse=$null
@@ -128,6 +207,20 @@ function Invoke-LicenseRequest {
         }
         Write-LicenseRequestEvent -Operation $Operation -State $state -Path $Path -Status $status -Received $received -ExceptionType $type -ServerCode $safeCode
         throw
+    } finally {
+        if ($null -ne $requestStream) {
+            $requestStream.Dispose()
+        }
+        if ($null -ne $responseStream) {
+            $responseStream.Dispose()
+        }
+        if ($null -ne $responseBuffer) {
+            $responseBuffer.Dispose()
+        }
+        if ($null -ne $response) {
+            $response.Dispose()
+        }
+        $clock.Stop()
     }
 }
 
