@@ -411,8 +411,9 @@ Add-Type -AssemblyName System.Drawing
     if ([string]::IsNullOrWhiteSpace($script:InstallToken) -or $script:InstallToken -notmatch '^[A-Za-z0-9_-]{32,128}$') { throw 'INSTALLATION_TICKET_INVALID' }
     Set-DiagnosticStage 'LICENSE_START' 'LICENSE_START_FAILED'
     $cfg=Invoke-ApiStart -Token $script:InstallToken
-    if ($cfg.client_type -notin @('cli','desktop') -or $cfg.provider_type -notin @('deepseek','chatgpt') -or $cfg.mode -ne $cfg.provider_type) { throw 'INSTALL_PLAN_MISMATCH' }
-    if (($cfg.provider_type -eq 'deepseek' -and $cfg.route -ne 'A') -or ($cfg.provider_type -eq 'chatgpt' -and $cfg.route -ne 'C')) { throw 'INSTALL_PLAN_MISMATCH' }
+    if ($cfg.client_type -notin @('cli','desktop') -or $cfg.provider_type -notin @('deepseek','chatgpt','claude','gemini') -or $cfg.mode -ne $cfg.provider_type) { throw 'INSTALL_PLAN_MISMATCH' }
+    if (($cfg.provider_type -eq 'deepseek' -and $cfg.route -ne 'A') -or ($cfg.provider_type -in @('chatgpt','claude','gemini') -and $cfg.route -ne 'C')) { throw 'INSTALL_PLAN_MISMATCH' }
+    if ($cfg.provider_type -in @('claude','gemini') -and $cfg.client_type -ne 'desktop') { throw 'INSTALL_PLAN_MISMATCH' }
     Set-DiagnosticStage 'PREFLIGHT' 'NETWORK_OR_ENVIRONMENT_FAILED'
     if ($cfg.provider_type -eq 'deepseek') {
         Test-DeepSeekNetwork
@@ -428,34 +429,49 @@ Add-Type -AssemblyName System.Drawing
     } else {
         Set-DiagnosticStage 'INSTALL' 'DESKTOP_INSTALL_FAILED'
         $script:InstallStartTime=Get-Date
-        $desktopPackage=Install-OfficialCodexDesktop
-        $desktopAppId=Test-OfficialCodexDesktopRegistration
+        switch ([string]$cfg.provider_type) {
+            'claude' { $desktopPackage=Install-ClaudeDesktop; $desktopAppId=Test-ClaudeDesktopRegistration }
+            'gemini' { $desktopPackage=Install-GeminiDesktop; $desktopAppId=Test-GeminiDesktopRegistration }
+            default { $desktopPackage=Install-OfficialCodexDesktop; $desktopAppId=Test-OfficialCodexDesktopRegistration }
+        }
     }
     if ($cfg.client_type -eq 'desktop') {
         # CONFIG 阶段：ChatGPT Desktop 不写 config.toml；可选配置 DeepSeek API Key（用户取消/选否不抛致命错误）
         Set-DiagnosticStage 'CONFIG' 'LOCAL_CONFIG_FAILED'
-        $dsResult=Invoke-ChatGPTDeepSeekOptionalSetup
-        try {
-            if (-not $dsResult.Configured) {
-                if (-not (Test-OpenAIDirectAccess)) { Show-OpenAINetworkNotice }
+        if ($cfg.provider_type -in @('chatgpt','deepseek')) {
+            $dsResult=Invoke-ChatGPTDeepSeekOptionalSetup
+            try {
+                if (-not $dsResult.Configured) {
+                    if (-not (Test-OpenAIDirectAccess)) { Show-OpenAINetworkNotice }
+                }
             }
-        }
-        catch {
+            catch {
+            }
         }
         # VERIFY 阶段：确认 Appx 包仍存在
         Set-DiagnosticStage 'DESKTOP_VERIFY' 'DESKTOP_VERIFY_FAILED'
-        $verifyPkg=Test-OfficialCodexDesktopRegistration
+        switch ([string]$cfg.provider_type) {
+            'claude' {
+                $verifyPkg=Test-ClaudeDesktopRegistration
+                $appId=[string]$verifyPkg.PackageFamilyName
+                Start-ClaudeDesktopApp -PackageFamilyName $appId
+            }
+            'gemini' {
+                $verifyPkg=Test-GeminiDesktopRegistration
+                $appId=[string]$verifyPkg.InstallPath
+                Start-GeminiDesktopApp -InstallPath $appId
+            }
+            default {
+                $verifyPkg=Test-OfficialCodexDesktopRegistration
+                $appId=[string]$verifyPkg.PackageFamilyName
+                try { Start-ChatGPTDesktopApp -PackageFamilyName $appId }
+                catch { Write-Host 'stage=DESKTOP_VERIFY operation=APP_LAUNCH result=failed_nonfatal' }
+            }
+        }
         $version=[string]$verifyPkg.Version
-        # 启动应用（best-effort：失败不影响安装结果，只记 warning）
-        try {
-            Start-ChatGPTDesktopApp -PackageFamilyName $verifyPkg.PackageFamilyName
-        }
-        catch {
-            Write-Host 'stage=DESKTOP_VERIFY operation=APP_LAUNCH result=failed_nonfatal'
-        }
         # verification.xml（desktop 简化版：只含 Version/ClientType/ProviderType/AppId）
         $proof=New-Object Xml.XmlDocument;$root=$proof.CreateElement('Verification');$null=$proof.AppendChild($root)
-        $dvalues=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;AppId=[string]$verifyPkg.PackageFamilyName}
+        $dvalues=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;AppId=$appId}
         foreach($name in $dvalues.Keys){$node=$proof.CreateElement($name);$node.InnerText=$dvalues[$name];$null=$root.AppendChild($node)}
         $proof.Save((Join-Path $PSScriptRoot 'verification.xml'))
         $totalElapsed=(Get-Date)-$script:InstallStartTime

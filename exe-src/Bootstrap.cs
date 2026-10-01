@@ -40,7 +40,7 @@ public static partial class Bootstrap {
  }
  static void ChildFailure(){
   try{string path=Path.Combine(workspace,"diagnostic-status.txt");Safety.NoLinks(workspace,path);var lines=File.ReadAllLines(path);
-   if(lines.Length==2&&Array.IndexOf(new[]{"PREFLIGHT","LICENSE","LICENSE_VERIFY","LICENSE_SELECT_ROUTE","LICENSE_START","LICENSE_COMPLETE","DOWNLOAD","PACKAGE_VERIFY","EXTRACT","INSTALL","CONFIG","CODEX_VERIFY","CLEANUP","FINAL_VERIFY","UNEXPECTED"},lines[0])>=0&&System.Text.RegularExpressions.Regex.IsMatch(lines[1],"^[A-Z_]{1,64}$")){stage=lines[0];errorCode=lines[1];}
+   if(lines.Length==2&&Array.IndexOf(new[]{"PREFLIGHT","LICENSE","LICENSE_VERIFY","LICENSE_SELECT_ROUTE","LICENSE_START","LICENSE_COMPLETE","DOWNLOAD","PACKAGE_VERIFY","EXTRACT","INSTALL","CONFIG","CODEX_VERIFY","CLEANUP","FINAL_VERIFY","DESKTOP_VERIFY","UNEXPECTED"},lines[0])>=0&&System.Text.RegularExpressions.Regex.IsMatch(lines[1],"^[A-Z_]{1,64}$")){stage=lines[0];errorCode=lines[1];}
   }catch{}
  }
  static string workspace, temp, exe, config, models, configHash, modelsHash, version, installationTicket, clientType, providerType, appId;
@@ -85,15 +85,41 @@ public static partial class Bootstrap {
   var launched=Process.Start(info);if(launched==null)throw new InvalidOperationException("POST_INSTALL_LAUNCH_FAILED");
   LogPostInstallLaunch("PASS",null);
  }
+ static string ProductName { get { return providerType=="claude"?"Claude Desktop":providerType=="gemini"?"Gemini Desktop":clientType=="desktop"?"ChatGPT Desktop":"Codex"; } }
+ static string RegistrationFunction {
+  get { return providerType=="claude"?"Test-ClaudeDesktopRegistration":providerType=="gemini"?"Test-GeminiDesktopRegistration":"Test-OfficialCodexDesktopRegistration"; }
+ }
+ // Use the same registration checks as Runner, loaded from the hashed embedded
+ // resource. This still works after cleanup removes the extracted scripts.
+ static string DesktopRegistrationScript(){
+  string source;using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("InstallerLibrary.ps1"))using(var reader=new StreamReader(stream)){source=reader.ReadToEnd();}
+  string marker="function "+RegistrationFunction+" {";int start=source.IndexOf(marker,StringComparison.Ordinal);if(start<0)throw new InvalidOperationException("DESKTOP_VERIFIER_MISSING");
+  int end=source.IndexOf("\nfunction ",start+marker.Length,StringComparison.Ordinal);if(end<0)throw new InvalidOperationException("DESKTOP_VERIFIER_MISSING");
+  return "$ErrorActionPreference='Stop'; "+source.Substring(start,end-start)+"\n$p="+RegistrationFunction+"; ";
+ }
+ static string ProbeDesktop(string script){
+  string encoded=Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
+  string ps=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe");
+  using(var p=new Process()){
+   p.StartInfo=new ProcessStartInfo(ps,"-NoProfile -NonInteractive -EncodedCommand "+encoded){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+   p.Start();var output=p.StandardOutput.ReadToEndAsync();var error=p.StandardError.ReadToEndAsync();
+   if(!p.WaitForExit(60000)){p.Kill();throw new InvalidOperationException("DESKTOP_VERIFY_TIMEOUT");}
+   p.WaitForExit();lastExit=p.ExitCode;if(p.ExitCode!=0)throw new InvalidOperationException("DESKTOP_PACKAGE_VERIFY_FAILED");return output.Result.Trim();
+  }
+ }
  static void LaunchCodexDesktop(){
-  if(clientType!="desktop"||appId!="OpenAI.Codex_2p2nqsd0c76g0!App")throw new InvalidOperationException("DESKTOP_APP_REGISTRATION_INVALID");
-  var launched=Process.Start(new ProcessStartInfo("explorer.exe","shell:AppsFolder\\"+appId){UseShellExecute=true,CreateNoWindow=false});
-  if(launched==null)throw new InvalidOperationException("POST_INSTALL_LAUNCH_FAILED");LogPostInstallLaunch("PASS",null);
+  string script=DesktopRegistrationScript();
+  if(providerType=="gemini")script+="Start-Process -FilePath $p.InstallPath -ErrorAction Stop";
+  else {
+   string id=providerType=="claude"?"Claude":null;
+   script+=id!=null?"Start-Process ('shell:AppsFolder\\'+$p.PackageFamilyName+'!Claude') -ErrorAction Stop":"$pkg=Get-AppxPackage|Where-Object {$_.PackageFamilyName -eq $p.PackageFamilyName}|Select-Object -First 1;$m=Get-AppxPackageManifest $pkg;$id=@($m.Package.Applications.Application)[0].Id;Start-Process ('shell:AppsFolder\\'+$p.PackageFamilyName+'!'+$id) -ErrorAction Stop";
+  }
+  ProbeDesktop(script);LogPostInstallLaunch("PASS",null);
  }
  static bool ShowFinishDialog(string detail){
-  using(var form=new Form()){form.Text="Codex 已安装成功";form.Size=new Size(520,285);form.StartPosition=FormStartPosition.CenterScreen;form.FormBorderStyle=FormBorderStyle.FixedDialog;form.MaximizeBox=false;form.MinimizeBox=false;
-   var label=new Label{Text="✓ Codex 已安装成功\n版本：Codex "+version+"\n"+detail,Dock=DockStyle.Top,Height=130,Padding=new Padding(20),AutoSize=false};form.Controls.Add(label);
-   var launch=new CheckBox{Text=clientType=="desktop"?"安装完成后打开 Codex":"安装完成后启动 Codex",Checked=true,AutoSize=true,Left=24,Top=145};form.Controls.Add(launch);
+  using(var form=new Form()){form.Text=ProductName+" 已安装成功";form.Size=new Size(520,285);form.StartPosition=FormStartPosition.CenterScreen;form.FormBorderStyle=FormBorderStyle.FixedDialog;form.MaximizeBox=false;form.MinimizeBox=false;
+   var label=new Label{Text="✓ "+ProductName+" 已安装成功\n版本："+version+"\n"+detail,Dock=DockStyle.Top,Height=130,Padding=new Padding(20),AutoSize=false};form.Controls.Add(label);
+   var launch=new CheckBox{Text="安装完成后打开 "+ProductName,Checked=true,AutoSize=true,Left=24,Top=145};form.Controls.Add(launch);
    var finish=new Button{Text="完成",Width=120,Height=40,Left=365,Top=190,DialogResult=DialogResult.OK};form.Controls.Add(finish);form.AcceptButton=finish;
    form.ShowDialog();return launch.Checked;
   }
@@ -102,7 +128,7 @@ public static partial class Bootstrap {
   if(CiTest){Console.WriteLine("THZ_CI_RESULT=PASS");return;}
   if(providerType=="chatgpt")detail=(clientType=="desktop"?"Codex 桌面版已安装完成。\n请在 Codex 官方界面登录 ChatGPT / Codex 账号。":"Codex 终端版已安装完成。\n如尚未登录，请按 Codex 官方提示完成账号登录。")+"\n"+detail;
   if(!ShowFinishDialog(detail))return;
-  while(true){try{if(clientType=="desktop")LaunchCodexDesktop();else LaunchCodexTerminal();return;}catch(Exception error){LogPostInstallLaunch("FAILED",error);var choice=Choice("Codex 已安装成功","✓ Codex 已安装完成，但未能自动打开。\n安装结果不受影响，你可以从开始菜单打开 Codex。",new[]{"重新启动 Codex","完成"});if(choice!="重新启动 Codex")return;}}
+  while(true){try{if(clientType=="desktop")LaunchCodexDesktop();else LaunchCodexTerminal();return;}catch(Exception error){LogPostInstallLaunch("FAILED",error);var choice=Choice(ProductName+" 已安装成功",ProductName+" 已安装完成，但未能自动打开。\n你可以从开始菜单打开应用。",new[]{"重新启动","完成"});if(choice!="重新启动")return;}}
  }
  static string VerifyEmbeddedResource(string path,string expected) {
   Stage("EMBEDDED_RESOURCE_VERIFY","RESOURCE_VERIFY_UNEXPECTED");
@@ -260,22 +286,35 @@ public static partial class Bootstrap {
  static void Verify(bool readProof){
   using(var f=new Form()){f.Text="正在验证 Codex";f.Size=new Size(440,150);f.StartPosition=FormStartPosition.CenterScreen;f.ControlBox=false;f.Controls.Add(new Label{Dock=DockStyle.Fill,Text="正在确认 Codex 是否安装成功…",TextAlign=ContentAlignment.MiddleCenter});f.Show();f.Refresh();VerifyCore(readProof);}
  }
+ static string ProofValue(XmlDocument proof,string name,bool required){
+  var node=proof.SelectSingleNode("/Verification/"+name);if(node==null){if(required)throw new InvalidOperationException("VERIFICATION_FIELD_MISSING");return "";}return node.InnerText;
+ }
  static void VerifyCore(bool readProof){
-  if(readProof){string proof=Path.Combine(workspace,"verification.xml");Safety.NoLinks(workspace,proof);var x=new XmlDocument();x.XmlResolver=null;using(var reader=XmlReader.Create(proof,new XmlReaderSettings{DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null})){x.Load(reader);}clientType=x.SelectSingleNode("/Verification/ClientType").InnerText;providerType=x.SelectSingleNode("/Verification/ProviderType").InnerText;exe=x.SelectSingleNode("/Verification/Executable").InnerText;appId=x.SelectSingleNode("/Verification/AppId").InnerText;config=x.SelectSingleNode("/Verification/Config").InnerText;models=x.SelectSingleNode("/Verification/Models").InnerText;configHash=x.SelectSingleNode("/Verification/ConfigHash").InnerText;modelsHash=x.SelectSingleNode("/Verification/ModelsHash").InnerText;
-   string home=Environment.GetEnvironmentVariable("CODEX_HOME");if(String.IsNullOrWhiteSpace(home))home=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".codex");
-   if(!Path.IsPathRooted(home)||Safety.Inside(workspace,home)||!String.Equals(Path.GetFullPath(config),Path.Combine(Path.GetFullPath(home),"config.toml"),StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("CONFIG_PATH");
-   if(providerType!="chatgpt"&&providerType!="deepseek")throw new InvalidOperationException("PROVIDER_INVALID");
-   if(providerType=="deepseek"&&(String.IsNullOrWhiteSpace(models)||!String.Equals(Path.GetFullPath(models),Path.Combine(Path.GetFullPath(home),"models.json"),StringComparison.OrdinalIgnoreCase)))throw new InvalidOperationException("CONFIG_PATH");
-   if(providerType=="chatgpt"&&!String.IsNullOrWhiteSpace(models)&&!String.Equals(Path.GetFullPath(models),Path.Combine(Path.GetFullPath(home),"models.json"),StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("CONFIG_PATH");
+  if(readProof){
+   string proof=Path.Combine(workspace,"verification.xml");Safety.NoLinks(workspace,proof);var x=new XmlDocument();x.XmlResolver=null;
+   using(var reader=XmlReader.Create(proof,new XmlReaderSettings{DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null})){x.Load(reader);}
+   clientType=ProofValue(x,"ClientType",true);providerType=ProofValue(x,"ProviderType",true);appId=ProofValue(x,"AppId",true);version=ProofValue(x,"Version",true);
+   if(clientType!="cli"&&clientType!="desktop")throw new InvalidOperationException("CLIENT_TYPE_INVALID");
+   if(providerType!="chatgpt"&&providerType!="deepseek"&&providerType!="claude"&&providerType!="gemini")throw new InvalidOperationException("PROVIDER_INVALID");
+   if(clientType!="desktop"&&(providerType=="claude"||providerType=="gemini"))throw new InvalidOperationException("INSTALL_PLAN_MISMATCH");
+   exe=ProofValue(x,"Executable",clientType!="desktop");config=ProofValue(x,"Config",clientType!="desktop");models=ProofValue(x,"Models",clientType!="desktop");configHash=ProofValue(x,"ConfigHash",clientType!="desktop");modelsHash=ProofValue(x,"ModelsHash",clientType!="desktop");
   }
   if(clientType=="desktop"){
-   if(appId!="OpenAI.Codex_2p2nqsd0c76g0!App")throw new InvalidOperationException("DESKTOP_APP_REGISTRATION_INVALID");
-   string script="$p=Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction Stop|Where-Object {$_.PublisherId -eq '2p2nqsd0c76g0' -and $_.Status -eq 'Ok'}|Sort-Object Version -Descending|Select-Object -First 1;if($null -eq $p){exit 31};$a=Get-StartApps|Where-Object {$_.AppID -eq 'OpenAI.Codex_2p2nqsd0c76g0!App'}|Select-Object -First 1;if($null -eq $a){exit 32};[Console]::Out.Write($p.Version.ToString())";
-   string encoded=Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));string ps=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"WindowsPowerShell","v1.0","powershell.exe");using(var p=new Process()){p.StartInfo=new ProcessStartInfo(ps,"-NoProfile -NonInteractive -EncodedCommand "+encoded){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};p.Start();var output=p.StandardOutput.ReadToEndAsync();var error=p.StandardError.ReadToEndAsync();if(!p.WaitForExit(30000)){p.Kill();throw new InvalidOperationException("DESKTOP_VERIFY_TIMEOUT");}p.WaitForExit();lastExit=p.ExitCode;if(p.ExitCode!=0)throw new InvalidOperationException("DESKTOP_PACKAGE_VERIFY_FAILED");version=output.Result.Trim();}
-   Log("DESKTOP_PACKAGE_VERIFY_PASS",null);
-  }else{version=Probe();Log("ABSOLUTE_PATH_VERIFY_PASS",null);}
+   if(String.IsNullOrWhiteSpace(appId))throw new InvalidOperationException("DESKTOP_APP_REGISTRATION_INVALID");
+   string script=DesktopRegistrationScript();string literal=appId.Replace("'","''");
+   if(providerType=="gemini")script+="if(-not [string]::Equals($p.InstallPath,'"+literal+"',[StringComparison]::OrdinalIgnoreCase)){exit 31};";
+   else script+="if($p.PackageFamilyName -cne '"+literal+"'){exit 31};";
+   script+="[Console]::Out.Write($p.Version)";string registeredVersion=ProbeDesktop(script);
+   if(String.IsNullOrWhiteSpace(registeredVersion)||registeredVersion!=version)throw new InvalidOperationException("DESKTOP_VERSION_MISMATCH");
+   Log("DESKTOP_PACKAGE_VERIFY_PASS",null);return;
+  }
+  string home=Environment.GetEnvironmentVariable("CODEX_HOME");if(String.IsNullOrWhiteSpace(home))home=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".codex");
+  if(!Path.IsPathRooted(home)||Safety.Inside(workspace,home)||!String.Equals(Path.GetFullPath(config),Path.Combine(Path.GetFullPath(home),"config.toml"),StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("CONFIG_PATH");
+  if(providerType=="deepseek"&&(String.IsNullOrWhiteSpace(models)||!String.Equals(Path.GetFullPath(models),Path.Combine(Path.GetFullPath(home),"models.json"),StringComparison.OrdinalIgnoreCase)))throw new InvalidOperationException("CONFIG_PATH");
+  if(providerType=="chatgpt"&&!String.IsNullOrWhiteSpace(models)&&!String.Equals(Path.GetFullPath(models),Path.Combine(Path.GetFullPath(home),"models.json"),StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("CONFIG_PATH");
+  version=Probe();Log("ABSOLUTE_PATH_VERIFY_PASS",null);
   if(Hash(config)!=configHash||(!String.IsNullOrWhiteSpace(models)&&(Hash(models)!=modelsHash)))throw new InvalidOperationException("CONFIG_CHANGED");
-  if(clientType!="desktop"){Stage("CODEX_VERIFY","CODEX_PATH_NOT_AVAILABLE");if(readProof)EnsureUserPath();ProbeUserPath();Log("USER_PATH_VERIFY_PASS",null);}
+  Stage("CODEX_VERIFY","CODEX_PATH_NOT_AVAILABLE");if(readProof)EnsureUserPath();ProbeUserPath();Log("USER_PATH_VERIFY_PASS",null);
  }
  static bool RunInstaller(){
   Stage("EMBEDDED_RESOURCE_VERIFY","RESOURCE_VALIDATION_FAILED");
@@ -295,18 +334,18 @@ public static partial class Bootstrap {
   if(Environment.OSVersion.Platform!=PlatformID.Win32NT)return;
   Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
   try{InitLog();Stage("LICENSE","INSTALLATION_TICKET_INVALID");installationTicket=LoadInstallationTicket();Extract();bool installed=RunInstaller();installationTicket=null;bool verified=false;
-   while(!verified){try{if(!installed)throw new InvalidOperationException("INSTALL_FAILED");Stage("CODEX_VERIFY","CODEX_VERSION_OR_CONFIG_FAILED");Verify(true);Log("PASS",null);verified=true;}catch(Exception error){
+   while(!verified){try{if(!installed)throw new InvalidOperationException("INSTALL_FAILED");Stage(clientType=="desktop"?"DESKTOP_VERIFY":"CODEX_VERIFY","INSTALLATION_VERIFY_FAILED");Verify(true);Log("PASS",null);verified=true;}catch(Exception error){
     if(CiTest){Log("FAILED",error);try{Console.Error.WriteLine("THZ_CI_RESULT=FAIL stage="+stage+" code="+errorCode);}catch{}Environment.Exit(2);}else{var choice=Choice("安装未完成",Failure(error),new[]{"重试检测","重试安装","查看解决办法","联系客服","退出"});
     if(choice=="重试检测"){installed=true;continue;}if(choice=="重试安装"){Extract();installed=RunInstaller();continue;}if(choice=="联系客服"){Contact();continue;}if(choice=="查看解决办法"){Notice("请确认官方安装资源网络可用、测试授权有效，且不存在旧版安装冲突。\n不要关闭系统安全功能。\n诊断目录："+workspace);continue;}return;}
    }}
    Stage("CLEANUP","CLEANUP_MANIFEST_FAILED");Track(Path.Combine(workspace,"verification.xml"));Manifest(true);Track(Path.Combine(workspace,"cleanup-manifest.xml"));
-   var action=CiTest?"暂时保留":Choice("Codex 已安装成功","✓ Codex 已安装成功\n版本：Codex "+version+"\n安装方式："+(clientType=="desktop"?"Official Microsoft Store Desktop":"Official Standalone")+"\n是否清理本次安装的临时文件？不会删除 Codex 或用户配置。",new[]{"立即清理","暂时保留"});
-   if(action!="立即清理"){CompleteAndOptionallyLaunch("临时文件已保留。\n下载的安装程序可手动删除，不影响 Codex。");if(CiTest)Environment.Exit(0);return;}
+   var action=CiTest?"暂时保留":Choice(ProductName+" 已安装成功","✓ "+ProductName+" 已安装成功\n版本："+version+"\n是否清理本次安装的临时文件？应用及用户配置会保留。",new[]{"立即清理","暂时保留"});
+   if(action!="立即清理"){CompleteAndOptionallyLaunch("临时文件已保留。\n下载的安装程序可手动删除，不影响已安装的应用。");if(CiTest)Environment.Exit(0);return;}
    Stage("CODEX_VERIFY","PRE_CLEANUP_VERIFY_FAILED");Verify(false);Stage("CLEANUP","CLEANUP_SAFETY_CHECK_FAILED");Safety.Cleanup(workspace,owned);
    // Never traverse or remove untracked files, links, or directories recursively.
    Safety.NoLinks(workspace,temp);if(Directory.GetFileSystemEntries(temp).Length==0)Directory.Delete(temp,false);
    bool leftovers=Directory.GetFileSystemEntries(workspace).Length>0;if(!leftovers)Directory.Delete(workspace,false);
-   Stage("FINAL_VERIFY","POST_CLEANUP_VERIFY_FAILED");Verify(false);Log("PASS",null);CompleteAndOptionallyLaunch("清理后再次验证通过。\nCodex 与用户配置均已保留。"+(leftovers?"\n未追踪的文件已安全保留。":""));
+   Stage("FINAL_VERIFY","POST_CLEANUP_VERIFY_FAILED");Verify(false);Log("PASS",null);CompleteAndOptionallyLaunch("清理后再次验证通过。\n应用与用户配置均已保留。"+(leftovers?"\n未追踪的文件已安全保留。":""));
   }catch(Exception error){if(CiTest){Log("FAILED",error);try{Console.Error.WriteLine("THZ_CI_RESULT=FAIL stage="+stage+" code="+errorCode);}catch{}Environment.Exit(1);}Notice(Failure(error));}
  }
 }

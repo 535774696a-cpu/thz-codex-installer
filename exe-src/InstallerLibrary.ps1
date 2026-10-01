@@ -1589,9 +1589,9 @@ function Start-ProgressSpinner {
         Succeeded = $false
     }
 
-    if ($Message -eq '正在下载 ChatGPT Desktop 安装包...') {
+    if ($Message -match '^正在下载 (ChatGPT|Claude|Gemini) Desktop 安装包\.\.\.$') {
         $spinner.CompletionMessage = '下载完成'
-    } elseif ($Message -eq '正在安装 ChatGPT Desktop...') {
+    } elseif ($Message -match '^正在安装 (ChatGPT|Claude|Gemini) Desktop\.\.\.$') {
         $spinner.CompletionMessage = '安装完成'
     } else {
         $spinner.CompletionMessage = '操作完成'
@@ -1785,6 +1785,263 @@ function Install-OfficialCodexDesktop {
         DownloadSeconds = [int]$downloadElapsed.TotalSeconds
         InstallSeconds = [int]$installElapsed.TotalSeconds
     }
+}
+
+function Install-ClaudeDesktop {
+    # The mirrored Claude MSIX is x64; reject unsupported machines before download.
+    if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'DESKTOP_ARCH_UNSUPPORTED' }
+    $arch = 'x64'
+    $url = "$BASE_URL/api/installer/download-claude-win"
+    $downloadDir = Join-Path $env:TEMP 'THZ-Claude-Desktop'
+    if (-not (Test-Path -LiteralPath $downloadDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+    }
+    $msixPath = Join-Path $downloadDir "Claude-$arch.msix"
+
+    $downloadStart = Get-Date
+    $downloadSpinner = Start-ProgressSpinner -Message '正在下载 Claude Desktop 安装包...'
+    try {
+        try {
+            $resp = Invoke-ForeignWebRequest -Uri $url -TimeoutSec 300
+            $fileStream = $null
+            try {
+                $fileStream = [IO.File]::Create($msixPath)
+                if ($null -ne $resp.RawContentStream) {
+                    $resp.RawContentStream.Position = 0
+                    $resp.RawContentStream.CopyTo($fileStream)
+                } else {
+                    $bytes = [Text.Encoding]::GetEncoding('iso-8859-1').GetBytes([string]$resp.Content)
+                    $fileStream.Write($bytes, 0, $bytes.Length)
+                }
+            } finally {
+                if ($null -ne $fileStream) {
+                    $fileStream.Dispose()
+                }
+            }
+            $downloadSpinner.Succeeded = $true
+        } catch {
+            throw 'DESKTOP_DOWNLOAD_FAILED'
+        }
+    } finally {
+        Stop-ProgressSpinner -Spinner $downloadSpinner
+    }
+    $downloadEnd = Get-Date
+    $downloadElapsed = $downloadEnd - $downloadStart
+
+    Write-Ok '正在校验 Claude Desktop 安装包...'
+    if (-not (Test-Path -LiteralPath $msixPath -PathType Leaf)) {
+        throw 'DESKTOP_PACKAGE_TOO_SMALL'
+    }
+    $size = [long](Get-Item -LiteralPath $msixPath).Length
+    if ($size -le 10MB) {
+        throw 'DESKTOP_PACKAGE_TOO_SMALL'
+    }
+
+    $probe = $null
+    $head = New-Object byte[] 2
+    try {
+        $probe = [IO.File]::OpenRead($msixPath)
+        if ($probe.Read($head, 0, 2) -ne 2) {
+            throw 'DESKTOP_MSIX_FORMAT_INVALID'
+        }
+    } finally {
+        if ($null -ne $probe) {
+            $probe.Dispose()
+        }
+    }
+    if ($head[0] -ne 0x50 -or $head[1] -ne 0x4B) {
+        throw 'DESKTOP_MSIX_FORMAT_INVALID'
+    }
+
+    $installStart = Get-Date
+    $installSpinner = Start-ProgressSpinner -Message '正在安装 Claude Desktop...'
+    try {
+        try {
+            Add-AppxPackage -Path $msixPath -ErrorAction Stop
+            $installSpinner.Succeeded = $true
+        } catch {
+            throw 'DESKTOP_APPX_INSTALL_FAILED'
+        }
+    } finally {
+        Stop-ProgressSpinner -Spinner $installSpinner
+    }
+    $installEnd = Get-Date
+    $installElapsed = $installEnd - $installStart
+    Write-Ok 'Claude Desktop 安装完成。'
+    Write-Host ("stage=INSTALL operation=DESKTOP_TIMING download_seconds={0} install_seconds={1}" -f [int]$downloadElapsed.TotalSeconds, [int]$installElapsed.TotalSeconds)
+
+    return @{
+        MsixPath = $msixPath
+        Arch = $arch
+        SizeBytes = $size
+        DownloadSeconds = [int]$downloadElapsed.TotalSeconds
+        InstallSeconds = [int]$installElapsed.TotalSeconds
+    }
+}
+
+function Install-GeminiDesktop {
+    # Google bootstrapper supports x64 and ARM64 Windows.
+    if ($env:PROCESSOR_ARCHITECTURE -notin @('AMD64', 'ARM64')) { throw 'DESKTOP_ARCH_UNSUPPORTED' }
+    $arch = [string]$env:PROCESSOR_ARCHITECTURE
+    $url = "$BASE_URL/api/installer/download-gemini-win"
+    $downloadDir = Join-Path $env:TEMP 'THZ-Gemini-Desktop'
+    if (-not (Test-Path -LiteralPath $downloadDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+    }
+    $exePath = Join-Path $downloadDir 'GeminiSetup.exe'
+
+    $downloadStart = Get-Date
+    $downloadSpinner = Start-ProgressSpinner -Message '正在下载 Gemini Desktop 安装包...'
+    try {
+        try {
+            $resp = Invoke-ForeignWebRequest -Uri $url -TimeoutSec 300
+            $fileStream = $null
+            try {
+                $fileStream = [IO.File]::Create($exePath)
+                if ($null -ne $resp.RawContentStream) {
+                    $resp.RawContentStream.Position = 0
+                    $resp.RawContentStream.CopyTo($fileStream)
+                } else {
+                    $bytes = [Text.Encoding]::GetEncoding('iso-8859-1').GetBytes([string]$resp.Content)
+                    $fileStream.Write($bytes, 0, $bytes.Length)
+                }
+            } finally {
+                if ($null -ne $fileStream) {
+                    $fileStream.Dispose()
+                }
+            }
+            $downloadSpinner.Succeeded = $true
+        } catch {
+            throw 'DESKTOP_DOWNLOAD_FAILED'
+        }
+    } finally {
+        Stop-ProgressSpinner -Spinner $downloadSpinner
+    }
+    $downloadEnd = Get-Date
+    $downloadElapsed = $downloadEnd - $downloadStart
+
+    Write-Ok '正在校验 Gemini Desktop 安装包...'
+    if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) {
+        throw 'DESKTOP_PACKAGE_TOO_SMALL'
+    }
+    $size = [long](Get-Item -LiteralPath $exePath).Length
+    if ($size -le 1MB) {
+        throw 'DESKTOP_PACKAGE_TOO_SMALL'
+    }
+
+    $probe = $null
+    $head = New-Object byte[] 2
+    try {
+        $probe = [IO.File]::OpenRead($exePath)
+        if ($probe.Read($head, 0, 2) -ne 2) {
+            throw 'GEMINI_EXE_FORMAT_INVALID'
+        }
+    } finally {
+        if ($null -ne $probe) {
+            $probe.Dispose()
+        }
+    }
+    if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
+        throw 'GEMINI_EXE_FORMAT_INVALID'
+    }
+
+    $signature = Get-AuthenticodeSignature -FilePath $exePath
+    if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or
+        $signature.SignerCertificate.Subject -notmatch '(?:^|, )O=Google LLC(?:,|$)') {
+        throw 'GEMINI_SIGNATURE_INVALID'
+    }
+    $installStart = Get-Date
+    $installSpinner = Start-ProgressSpinner -Message '正在安装 Gemini Desktop...'
+    try {
+        try {
+            # Google Updater online installer. Explicit tag is required by the mirrored bootstrapper.
+            $arguments = '--install --silent --tag="appguid={533DD80C-942A-4464-B6A9-2E59428D784E}&appname=Gemini&needsadmin=false&ap=prod"'
+            $process = Start-Process -FilePath $exePath -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+            Write-Host ("stage=INSTALL operation=GEMINI_INSTALL exit_code={0}" -f $process.ExitCode)
+            if ($process.ExitCode -ne 0) { throw 'GEMINI_INSTALL_FAILED' }
+            $installSpinner.Succeeded = $true
+        } catch {
+            throw 'GEMINI_INSTALL_FAILED'
+        }
+    } finally {
+        Stop-ProgressSpinner -Spinner $installSpinner
+    }
+    $installEnd = Get-Date
+    $installElapsed = $installEnd - $installStart
+    Write-Ok 'Gemini Desktop 安装完成。'
+    Write-Host ("stage=INSTALL operation=DESKTOP_TIMING download_seconds={0} install_seconds={1}" -f [int]$downloadElapsed.TotalSeconds, [int]$installElapsed.TotalSeconds)
+
+    return @{
+        ExePath = $exePath
+        Arch = $arch
+        SizeBytes = $size
+        DownloadSeconds = [int]$downloadElapsed.TotalSeconds
+        InstallSeconds = [int]$installElapsed.TotalSeconds
+    }
+}
+
+
+function Test-ClaudeDesktopRegistration {
+    $pkg = Get-AppxPackage -Name 'Claude' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq 'Claude' -and $_.Status -eq 'Ok' -and $_.Publisher -match 'O="Anthropic, PBC"' } |
+        Sort-Object Version -Descending | Select-Object -First 1
+    if ($null -eq $pkg) { throw 'DESKTOP_APP_REGISTRATION_MISSING' }
+    $manifest = Get-AppxPackageManifest -Package $pkg -ErrorAction Stop
+    if (@($manifest.Package.Applications.Application.Id) -notcontains 'Claude') {
+        throw 'DESKTOP_APP_REGISTRATION_MISSING'
+    }
+    return @{ PackageFamilyName = [string]$pkg.PackageFamilyName; Version = [string]$pkg.Version; Name = [string]$pkg.Name }
+}
+
+function Test-GeminiDesktopRegistration {
+    $keys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    $entries = @(Get-ItemProperty -Path $keys -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match 'Gemini' })
+    $candidates = New-Object Collections.Generic.List[string]
+    foreach ($entry in $entries) {
+        if ($entry.DisplayIcon) {
+            $icon = ([string]$entry.DisplayIcon -replace ',\s*-?\d+\s*$', '').Trim('"')
+            if ([IO.Path]::GetExtension($icon) -eq '.exe') { $candidates.Add($icon) }
+        }
+        if ($entry.InstallLocation) { $candidates.Add((Join-Path $entry.InstallLocation 'gemini.exe')) }
+    }
+    foreach ($base in @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not [string]::IsNullOrWhiteSpace($base)) {
+            $candidates.Add((Join-Path $base 'Google\Gemini\Application\gemini.exe'))
+            $candidates.Add((Join-Path $base 'Google\Gemini\gemini.exe'))
+        }
+    }
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $file = Get-Item -LiteralPath $candidate
+        if ($file.Name -ine 'gemini.exe') { continue }
+        $signature = Get-AuthenticodeSignature -FilePath $file.FullName
+        if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -notmatch '(?:^|, )O=Google LLC(?:,|$)') { continue }
+        $version = [string]$file.VersionInfo.ProductVersion
+        if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = [string]($entries | Select-Object -First 1).DisplayVersion
+        }
+        if ([string]::IsNullOrWhiteSpace($version)) { continue }
+        return @{ InstallPath = $file.FullName; Version = $version; Name = 'Gemini' }
+    }
+    throw 'GEMINI_APP_REGISTRATION_MISSING'
+}
+
+function Start-ClaudeDesktopApp {
+    param([string]$PackageFamilyName)
+    try { Start-Process "shell:AppsFolder\${PackageFamilyName}!Claude" -ErrorAction Stop }
+    catch { throw 'DESKTOP_APP_START_FAILED' }
+}
+
+function Start-GeminiDesktopApp {
+    param([string]$InstallPath)
+    try { Start-Process -FilePath $InstallPath -ErrorAction Stop }
+    catch { throw 'GEMINI_APP_START_FAILED' }
 }
 
 function Test-OfficialCodexDesktopRegistration {
