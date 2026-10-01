@@ -434,6 +434,13 @@ Add-Type -AssemblyName System.Drawing
         # CONFIG 阶段：ChatGPT Desktop 不写 config.toml；可选配置 DeepSeek API Key（用户取消/选否不抛致命错误）
         Set-DiagnosticStage 'CONFIG' 'LOCAL_CONFIG_FAILED'
         $dsResult=Invoke-ChatGPTDeepSeekOptionalSetup
+        try {
+            if (-not $dsResult.Configured) {
+                if (-not (Test-OpenAIDirectAccess)) { Show-OpenAINetworkNotice }
+            }
+        }
+        catch {
+        }
         # VERIFY 阶段：确认 Appx 包仍存在
         Set-DiagnosticStage 'CODEX_VERIFY' 'CODEX_VERSION_OR_CONFIG_FAILED'
         $verifyPkg=Test-OfficialCodexDesktopRegistration

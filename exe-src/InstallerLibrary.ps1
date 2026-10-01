@@ -1860,6 +1860,83 @@ function Show-YesNoDialog {
     }
 }
 
+function Test-OpenAIDirectAccess {
+    try {
+        foreach ($url in @('https://chatgpt.com/', 'https://api.openai.com/')) {
+            $response = $null
+            try {
+                [Net.HttpWebRequest]$request = [Net.WebRequest]::Create($url)
+                $request.Method = 'HEAD'
+                $request.Proxy = $null
+                $request.Timeout = 10000
+                $request.ReadWriteTimeout = 10000
+                $response = $request.GetResponse()
+                return $true
+            }
+            catch [Net.WebException] {
+                if ($null -ne $_.Exception.Response) {
+                    $response = $_.Exception.Response
+                    return $true
+                }
+            }
+            catch {
+            }
+            finally {
+                if ($null -ne $response) {
+                    $response.Close()
+                    $response.Dispose()
+                }
+            }
+        }
+        return $false
+    }
+    catch {
+        return $false
+    }
+}
+
+function Show-OpenAINetworkNotice {
+    $form = $null
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = '温馨提示'
+        $form.Size = New-Object System.Drawing.Size(560, 320)
+        $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+        $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+        $form.TopMost = $true
+        $form.Font = New-Object System.Drawing.Font('Microsoft YaHei', 10)
+
+        $label = New-Object System.Windows.Forms.Label
+        $label.Location = New-Object System.Drawing.Point(35, 30)
+        $label.Size = New-Object System.Drawing.Size(490, 175)
+        $label.Text = "检测到你的网络可能无法直接访问 OpenAI。`n`nChatGPT 已安装成功，但日常使用需要你自己准备能上 OpenAI 的网络环境。`n`n安装器只解决下载安装问题，不提供日常使用网络。"
+        $form.Controls.Add($label)
+
+        $button = New-Object System.Windows.Forms.Button
+        $button.Text = '知道了'
+        $button.Size = New-Object System.Drawing.Size(100, 35)
+        $button.Location = New-Object System.Drawing.Point(222, 220)
+        $button.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.AcceptButton = $button
+        $form.CancelButton = $button
+        $form.Controls.Add($button)
+
+        [void]$form.ShowDialog()
+    }
+    catch {
+    }
+    finally {
+        if ($null -ne $form) {
+            $form.Dispose()
+        }
+    }
+}
+
 function Invoke-ChatGPTDeepSeekOptionalSetup {
     $want = Show-YesNoDialog -Title '特好装' -Message "ChatGPT Desktop 安装成功！`n`n是否需要配置 DeepSeek API Key？`n（配置后可在本机使用 DeepSeek 服务）"
     if (-not $want) {
