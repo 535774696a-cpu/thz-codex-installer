@@ -1196,7 +1196,7 @@ function Install-CodexCliFromOfficialStandalone {
         if (-not $proc.Start()) { throw 'OFFICIAL_INSTALL_START_FAILED' }
         $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
         $stderrTask = $proc.StandardError.ReadToEndAsync()
-        $done = $proc.WaitForExit(300000)  # 官方安装器下载+解压+安装，5 分钟上限
+        $done = $proc.WaitForExit(900000)  # 官方安装器下载+解压+安装，15 分钟上限（经代理下载 130MB 可能较慢）
         if (-not $done) {
             try { $proc.Kill() } catch {}
             $proc.WaitForExit()
