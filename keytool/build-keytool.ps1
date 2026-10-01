@@ -1,7 +1,7 @@
-$ErrorActionPreference = 'Stop'
 param(
     [string]$OutDir = (Join-Path $PSScriptRoot 'dist')
 )
+$ErrorActionPreference = 'Stop'
 
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) ('thz-keytool-build-' + [Guid]::NewGuid().ToString('N'))
 
