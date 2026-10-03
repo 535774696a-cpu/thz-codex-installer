@@ -48,6 +48,17 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $ScriptVersion = '4.6.0.0'
 
+function Test-NonInteractive {
+    <#
+    .SYNOPSIS
+        是否为 CI/无人值守模式（跳过所有阻塞式 GUI 弹窗）。
+    .DESCRIPTION
+        与 Bootstrap.cs 的 THZ_CI_TEST=1 配套：CI 环境下自动跳过
+        DeepSeek 配置弹窗、OpenAI 网络提示等需要人工点击的对话框。
+    #>
+    return [string]::Equals($env:THZ_CI_TEST, '1', [StringComparison]::Ordinal)
+}
+
 # ---- V1 官方 standalone 安装（OpenAI 官方 install.ps1）----
 # V1 主安装路线：官方 Windows standalone（无需 Node/npm）。
 # 官方安装器负责：检测平台 / 下载 / SHA256 校验 / 解压 / 建立 standalone / PATH。
@@ -2118,6 +2129,11 @@ function Show-YesNoDialog {
         [string]$Message
     )
 
+    if (Test-NonInteractive) {
+        Write-Host 'stage=CONFIG operation=YESNO_DIALOG skipped=non_interactive'
+        return $false
+    }
+
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
     Add-Type -AssemblyName System.Drawing -ErrorAction Stop
 
@@ -2199,6 +2215,10 @@ function Test-OpenAIDirectAccess {
 }
 
 function Show-OpenAINetworkNotice {
+    if (Test-NonInteractive) {
+        Write-Host 'stage=CONFIG operation=OPENAI_NETWORK_NOTICE skipped=non_interactive'
+        return
+    }
     $form = $null
     try {
         Add-Type -AssemblyName System.Windows.Forms
@@ -2241,6 +2261,10 @@ function Show-OpenAINetworkNotice {
 }
 
 function Invoke-ChatGPTDeepSeekOptionalSetup {
+    if (Test-NonInteractive) {
+        Write-Host 'stage=CONFIG operation=DEEPSEEK_SETUP skipped=non_interactive'
+        return @{ Configured = $false }
+    }
     $want = Show-YesNoDialog -Title '特好装' -Message "ChatGPT Desktop 安装成功！`n`n是否需要配置 DeepSeek API Key？`n（配置后可在本机使用 DeepSeek 服务）"
     if (-not $want) {
         return @{ Configured = $false }
