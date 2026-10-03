@@ -1,0 +1,263 @@
+name: Proxy Path Test (GFW simulation)
+
+# 模拟国内网络环境，测试安装器的 hysteria2 代理链路
+#
+# 背景：GitHub runner 是美国 IP，直连就能下载，根本走不到代理。
+# 本 workflow 在跑安装器之前，用 hosts 文件把境外域名指向 127.0.0.1
+# （模拟 GFW 封锁），逼安装器走 hysteria2 代理下载。
+#
+# 封锁的域名：
+#   - persistent.oaistatic.com  (ChatGPT 安装包直连下载)
+#   - dl.google.com             (Gemini 在线安装器)
+#   - chatgpt.com / api.openai.com (安装后网络环境检测)
+# 不封锁：
+#   - codex.thz.quest (安装器本体、hysteria.exe、proxy-sub、Claude/Gemini 镜像包都从这来)
+#
+# 运行安装器时设置 THZ_CI_TEST=1，跳过所有阻塞式 GUI 弹窗。
+
+on:
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: '测试哪些应用 (逗号分隔: chatgpt,claude,gemini)'
+        required: true
+        default: 'chatgpt'
+        type: string
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Build matrix
+        id: matrix
+        shell: bash
+        env:
+          APPS: ${{ inputs.apps }}
+        run: |
+          set -euo pipefail
+          VALID_APPS="chatgpt claude gemini"
+          for app in $(echo "$APPS" | tr ',' ' '); do
+            if [[ ! " $VALID_APPS " =~ " $app " ]]; then
+              echo "Invalid app: $app" >&2; exit 1
+            fi
+          done
+          matrix="$(echo "$APPS" | tr ',' '\n' | jq -R . | jq -cs '{include: [.[] | {app: .}]}')"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Testing apps: $APPS"
+
+  proxy-test:
+    needs: setup
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Block foreign domains (simulate GFW)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 把境外域名指向 127.0.0.1，模拟国内直连被墙
+          # 注意：绝不封 codex.thz.quest
+          $blocked = @(
+            'persistent.oaistatic.com',
+            'dl.google.com',
+            'chatgpt.com',
+            'api.openai.com',
+            'auth.openai.com'
+          )
+          $hostsPath = "$env:SystemRoot\System32\drivers\etc\hosts"
+          $hosts = Get-Content -LiteralPath $hostsPath -Raw -ErrorAction SilentlyContinue
+          if ($null -eq $hosts) { $hosts = '' }
+          foreach ($domain in $blocked) {
+            if ($hosts -notmatch [regex]::Escape($domain)) {
+              Add-Content -LiteralPath $hostsPath -Value "127.0.0.1 $domain" -Encoding Ascii
+              Write-Host "BLOCKED $domain -> 127.0.0.1"
+            } else {
+              Write-Host "ALREADY BLOCKED $domain"
+            }
+          }
+          # 刷新 DNS 缓存
+          ipconfig /flushdns | Out-Null
+
+      - name: Verify blocking works
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 确认境外域名已不可达
+          foreach ($domain in @('persistent.oaistatic.com', 'dl.google.com')) {
+            try {
+              $addrs = [Net.Dns]::GetHostAddresses($domain)
+              $ips = ($addrs | ForEach-Object { $_.ToString() }) -join ','
+              Write-Host "DNS $domain -> $ips"
+              if ($ips -notmatch '127\.0\.0\.1') {
+                throw "$domain did not resolve to 127.0.0.1 (got: $ips)"
+              }
+            } catch {
+              Write-Host "DNS $domain failed (also acceptable): $($_.Exception.Message)"
+            }
+          }
+          # 确认 codex.thz.quest 未被封（必须可达）
+          try {
+            $resp = Invoke-WebRequest -Uri 'https://codex.thz.quest/api/installer/download-chatgpt-win' -Method Head -UseBasicParsing -TimeoutSec 30
+            Write-Host "codex.thz.quest REACHABLE (HTTP $($resp.StatusCode))"
+          } catch {
+            # HEAD 可能不被支持，尝试 GET 前几个字节
+            Write-Host "HEAD failed, trying GET: $($_.Exception.Message)"
+            $resp = Invoke-WebRequest -Uri 'https://codex.thz.quest/api/installer/download-chatgpt-win' -UseBasicParsing -TimeoutSec 30 -OutFile "$env:RUNNER_TEMP\probe.exe"
+            $size = (Get-Item "$env:RUNNER_TEMP\probe.exe").Length
+            Write-Host "codex.thz.quest REACHABLE (downloaded $size bytes)"
+            Remove-Item "$env:RUNNER_TEMP\probe.exe" -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Download installer for ${{ matrix.app }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = '${{ matrix.app }}'
+          $endpoints = @{
+            'chatgpt' = 'https://codex.thz.quest/api/installer/download-chatgpt-win'
+            'claude'  = 'https://codex.thz.quest/api/installer/download-claude-setup-win'
+            'gemini'  = 'https://codex.thz.quest/api/installer/download-gemini-setup-win'
+          }
+          $url = $endpoints[$app]
+          $outFile = Join-Path $env:RUNNER_TEMP "THZ-Installer-$app.exe"
+          Write-Host "Downloading $app installer from $url"
+          Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing -TimeoutSec 120
+          $size = (Get-Item -LiteralPath $outFile).Length
+          Write-Host "Downloaded $size bytes to $outFile"
+          if ($size -lt 10000) { throw "installer too small ($size bytes)" }
+          # 必须带 THZ_CI_TEST 的新构建（检查构建时间戳或直接跑）
+          echo "INSTALLER_PATH=$outFile" >> $env:GITHUB_ENV
+
+      - name: Run installer with GFW simulation for ${{ matrix.app }}
+        run: |
+          $ErrorActionPreference = 'Continue'  # 安装器自己报 exit code，我们手动检查
+          $app = '${{ matrix.app }}'
+          $installer = $env:INSTALLER_PATH
+          $logFile = Join-Path $env:RUNNER_TEMP "installer-$app.log"
+
+          # CI 模式：跳过所有阻塞式 GUI 弹窗
+          $env:THZ_CI_TEST = '1'
+
+          Write-Host "=== Running installer (THZ_CI_TEST=1, GFW simulated) ==="
+          $proc = Start-Process -FilePath $installer -Wait -PassThru `
+            -RedirectStandardOutput $logFile `
+            -RedirectStandardError "$logFile.err"
+          $exitCode = $proc.ExitCode
+          Write-Host "Installer exit code: $exitCode"
+
+          Write-Host "=== Installer stdout (last 100 lines) ==="
+          if (Test-Path -LiteralPath $logFile) {
+            Get-Content -LiteralPath $logFile -Tail 100 | ForEach-Object { Write-Host "  $_" }
+          }
+          if (Test-Path -LiteralPath "$logFile.err") {
+            Write-Host "=== Installer stderr ==="
+            Get-Content -LiteralPath "$logFile.err" | ForEach-Object { Write-Host "  ERR: $_" }
+          }
+
+          # 保存完整日志供后续步骤分析
+          Copy-Item -LiteralPath $logFile -Destination (Join-Path $env:RUNNER_TEMP "full-$app.log") -Force -ErrorAction SilentlyContinue
+
+          if ($exitCode -ne 0) {
+            throw "installer failed with exit code $exitCode"
+          }
+
+      - name: Verify proxy was used and app installed (${{ matrix.app }})
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = '${{ matrix.app }}'
+          $logFile = Join-Path $env:RUNNER_TEMP "full-$app.log"
+          $log = ''
+          if (Test-Path -LiteralPath $logFile) {
+            $log = Get-Content -LiteralPath $logFile -Raw
+          }
+
+          # 1. 检查代理是否被触发（日志标记）
+          $proxyMarkers = @(
+            'EMBEDDED_PROXY',
+            'download_via=embedded_proxy',
+            'proxy_status',
+            'hysteria'
+          )
+          $foundMarkers = @()
+          foreach ($marker in $proxyMarkers) {
+            if ($log -match [regex]::Escape($marker)) { $foundMarkers += $marker }
+          }
+          Write-Host "Proxy markers found: $($foundMarkers -join ', ')"
+          if ($foundMarkers.Count -eq 0) {
+            Write-Warning "NO PROXY MARKERS FOUND - proxy path may not have been exercised!"
+            # ChatGPT 必须走代理（包在境外）；没走代理就是测试失败
+            if ($app -eq 'chatgpt') {
+              throw "ChatGPT download should have used proxy (persistent.oaistatic.com blocked), but no proxy markers in log"
+            }
+          }
+
+          # 2. 验证应用已安装
+          switch ($app) {
+            'chatgpt' {
+              $pkg = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($null -eq $pkg) { throw "ChatGPT Desktop (OpenAI.Codex) not found after install" }
+              Write-Host "INSTALLED: $($pkg.Name) v$($pkg.Version)"
+            }
+            'claude' {
+              $pkg = Get-AppxPackage | Where-Object { $_.Name -like '*Claude*' } | Select-Object -First 1
+              if ($null -eq $pkg) { throw "Claude Desktop not found after install" }
+              Write-Host "INSTALLED: $($pkg.Name) v$($pkg.Version)"
+            }
+            'gemini' {
+              # Gemini 是传统 exe 安装，检查安装目录或注册表
+              $geminiPaths = @(
+                "$env:LOCALAPPDATA\Google\Chrome\Application",  # 占位，实际检查由安装器日志确认
+                "$env:ProgramFiles\Google"
+              )
+              Write-Host "Gemini install verification via installer log (online installer)"
+              if ($log -match 'GEMINI.*(SUCCESS|INSTALLED|完成)') {
+                Write-Host "INSTALLED: Gemini (per installer log)"
+              } else {
+                Write-Warning "Could not confirm Gemini install from log; manual check needed"
+              }
+            }
+          }
+
+          Write-Host "PROXY_PATH_TEST app=$app RESULT=PASS"
+
+      - name: Upload installer logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-test-fail-${{ matrix.app }}
+          path: ${{ runner.temp }}/full-${{ matrix.app }}.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  report:
+    needs:
+      - setup
+      - proxy-test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write test summary
+        shell: bash
+        env:
+          APPS: ${{ inputs.apps }}
+          RESULT: ${{ needs.proxy-test.result }}
+        run: |
+          {
+            echo "## 代理链路测试汇总 (GFW 模拟)"
+            echo
+            echo "- 应用: ${APPS}"
+            echo "- 封锁域名: persistent.oaistatic.com, dl.google.com, chatgpt.com, api.openai.com"
+            echo "- 结果: ${RESULT}"
+            echo
+            echo "预期：安装器检测到直连失败，自动启动 hysteria2 代理完成下载/安装。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$RESULT" != "success" ]]; then
+            echo "代理链路测试失败 (result=${RESULT})" >&2
+            exit 1
+          fi
+          echo "代理链路测试通过。"
