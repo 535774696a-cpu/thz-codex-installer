@@ -436,7 +436,7 @@ Add-Type -AssemblyName System.Drawing
         }
     }
     if ($cfg.client_type -eq 'desktop') {
-        # CONFIG 阶段：ChatGPT Desktop 不写 config.toml；可选配置 DeepSeek API Key（用户取消/选否不抛致命错误）
+        # CONFIG 阶段：可选配置 DeepSeek API Key（用户取消/选否不抛致命错误）
         Set-DiagnosticStage 'CONFIG' 'LOCAL_CONFIG_FAILED'
         if ($cfg.provider_type -in @('chatgpt','deepseek')) {
             $dsResult=Invoke-ChatGPTDeepSeekOptionalSetup
@@ -444,6 +444,14 @@ Add-Type -AssemblyName System.Drawing
                 if (-not $dsResult.Configured) {
                     if (-not (Test-OpenAIDirectAccess)) { Show-OpenAINetworkNotice }
                 }
+            }
+            catch {
+            }
+        }
+        if ($cfg.provider_type -eq 'claude') {
+            # Claude Desktop 装完后，可选为 Claude Code 配置 DeepSeek（用户取消/选否不抛致命错误）
+            try {
+                $null=Invoke-ClaudeCodeDeepSeekOptionalSetup
             }
             catch {
             }

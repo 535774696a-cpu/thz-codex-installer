@@ -2250,7 +2250,8 @@ function Invoke-ChatGPTDeepSeekOptionalSetup {
         Write-Host 'stage=CONFIG operation=DEEPSEEK_SETUP skipped=non_interactive'
         return @{ Configured = $false }
     }
-    $want = Show-YesNoDialog -Title '特好装' -Message "ChatGPT Desktop 安装成功！`n`n是否需要配置 DeepSeek API Key？`n（配置后可在本机使用 DeepSeek 服务）"
+
+    $want = Show-YesNoDialog -Title '特好装' -Message "ChatGPT Desktop 安装成功！`n`n是否需要配置 DeepSeek API Key？`n（配置后 Codex 引擎将使用 DeepSeek 模型，无需海外网络）"
     if (-not $want) {
         return @{ Configured = $false }
     }
@@ -2292,7 +2293,118 @@ function Invoke-ChatGPTDeepSeekOptionalSetup {
             throw 'KEY_VALIDATION_FAILED'
         }
 
+        $configDir = Join-Path $env:USERPROFILE '.codex'
+        $configPath = Join-Path $configDir 'config.toml'
+        $tempPath = Join-Path $configDir ('config.toml.' + [Guid]::NewGuid().ToString('N') + '.tmp')
+
         try {
+            if (-not (Test-Path -LiteralPath $configDir)) {
+                New-Item -Path $configDir -ItemType Directory -Force | Out-Null
+            }
+
+            $content = ''
+            if ([IO.File]::Exists($configPath)) {
+                $content = [IO.File]::ReadAllText($configPath)
+            }
+
+            $newline = "`r`n"
+            if ($content -match "`r`n") {
+                $newline = "`r`n"
+            } elseif ($content -match "`n") {
+                $newline = "`n"
+            }
+
+            $lines = New-Object 'System.Collections.Generic.List[string]'
+            if ($content.Length -gt 0) {
+                foreach ($line in ($content -split '\r\n|\n|\r')) {
+                    $lines.Add($line)
+                }
+            }
+
+            $merged = New-Object 'System.Collections.Generic.List[string]'
+            $rootSettings = @(
+                'model = "deepseek-chat"',
+                'model_provider = "deepseek"'
+            )
+            $providerSettings = @(
+                'name = "DeepSeek"',
+                'base_url = "https://api.deepseek.com/v1"',
+                'wire_api = "responses"',
+                'env_key = "DEEPSEEK_API_KEY"'
+            )
+
+            $section = 'root'
+            $rootAdded = $false
+            $providerAdded = $false
+
+            foreach ($line in $lines) {
+                if ($line -match '^\s*\[\[?[^\]]+\]\]?\s*(?:#.*)?$') {
+                    if (-not $rootAdded) {
+                        foreach ($setting in $rootSettings) {
+                            $merged.Add($setting)
+                        }
+                        $rootAdded = $true
+                    }
+
+                    $merged.Add($line)
+
+                    if ($line -match '^\s*\[\s*model_providers\.deepseek\s*\]\s*(?:#.*)?$') {
+                        $section = 'deepseek'
+                        if (-not $providerAdded) {
+                            foreach ($setting in $providerSettings) {
+                                $merged.Add($setting)
+                            }
+                            $providerAdded = $true
+                        }
+                    } else {
+                        $section = 'other'
+                    }
+                    continue
+                }
+
+                if ($section -eq 'root' -and
+                    $line -match '^\s*(?:model|model_provider)\s*=') {
+                    continue
+                }
+
+                if ($section -eq 'deepseek' -and
+                    $line -match '^\s*(?:name|base_url|wire_api|env_key)\s*=') {
+                    continue
+                }
+
+                $merged.Add($line)
+            }
+
+            if (-not $rootAdded) {
+                foreach ($setting in $rootSettings) {
+                    $merged.Add($setting)
+                }
+            }
+
+            if (-not $providerAdded) {
+                if ($merged.Count -gt 0 -and $merged[$merged.Count - 1] -ne '') {
+                    $merged.Add('')
+                }
+                $merged.Add('[model_providers.deepseek]')
+                foreach ($setting in $providerSettings) {
+                    $merged.Add($setting)
+                }
+            }
+
+            $newContent = [string]::Join($newline, $merged.ToArray())
+            if (-not $newContent.EndsWith($newline)) {
+                $newContent += $newline
+            }
+
+            $encoding = New-Object System.Text.UTF8Encoding($false)
+            [IO.File]::WriteAllText($tempPath, $newContent, $encoding)
+
+            if ([IO.File]::Exists($configPath)) {
+                [IO.File]::Replace($tempPath, $configPath, $null)
+            } else {
+                [IO.File]::Move($tempPath, $configPath)
+            }
+
             [Environment]::SetEnvironmentVariable(
                 'DEEPSEEK_API_KEY',
                 $key,
@@ -2300,13 +2412,114 @@ function Invoke-ChatGPTDeepSeekOptionalSetup {
             )
         } finally {
             $key = $null
+            if ([IO.File]::Exists($tempPath)) {
+                [IO.File]::Delete($tempPath)
+            }
         }
 
         [Windows.Forms.MessageBox]::Show(
-            'DeepSeek API Key 配置成功！',
+            'DeepSeek API Key 配置成功！Codex 已切换到 DeepSeek 模型。',
             '特好装'
         ) | Out-Null
         return @{ Configured = $true }
+    }
+
+    throw 'KEY_ATTEMPTS_EXHAUSTED'
+}
+
+function Invoke-ClaudeCodeDeepSeekOptionalSetup {
+    if (Test-NonInteractive) {
+        Write-Output 'stage=CONFIG operation=CLAUDE_DEEPSEEK_SETUP skipped=non_interactive'
+        return @{ Configured = $false }
+    }
+
+    $message = "Claude Desktop 安装成功！`n`n是否需要为 Claude Code 配置 DeepSeek API Key？`n（配置后 Claude Code 将使用 DeepSeek 模型，无需海外网络）"
+    if (-not (Show-YesNoDialog -Title '特好装' -Message $message)) {
+        return @{ Configured = $false }
+    }
+
+    Add-Type -AssemblyName System.Windows.Forms
+
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $key = $null
+        try {
+            $key = [string](Show-DeepSeekKeyGuiDialog)
+
+            if ($key.Length -lt 12) {
+                [void][System.Windows.Forms.MessageBox]::Show(
+                    'Key 不完整，请重新输入。', '特好装', 'OK', 'Warning'
+                )
+                continue
+            }
+
+            $valid = $false
+            try {
+                $valid = [bool](Test-DeepSeekApiWithKey $key)
+            }
+            catch {
+                $valid = $false
+            }
+
+            if (-not $valid) {
+                if ($attempt -lt 3 -and -not (Show-YesNoDialog -Title '特好装' -Message 'Key 验证失败，是否重试？')) {
+                    return @{ Configured = $false }
+                }
+                continue
+            }
+
+            $profileRoot = $env:USERPROFILE
+            if ([string]::IsNullOrEmpty($profileRoot)) {
+                $profileRoot = $HOME
+            }
+
+            $claudeDir = Join-Path $profileRoot '.claude'
+            $settingsPath = Join-Path $claudeDir 'settings.json'
+            $config = @{}
+
+            if (Test-Path -LiteralPath $settingsPath) {
+                $existing = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($existing -isnot [pscustomobject]) {
+                    throw 'Claude Code settings.json must contain a JSON object.'
+                }
+                foreach ($property in $existing.PSObject.Properties) {
+                    $config[$property.Name] = $property.Value
+                }
+            }
+
+            $configEnv = @{}
+            if ($config.ContainsKey('env') -and $null -ne $config['env']) {
+                if ($config['env'] -isnot [pscustomobject]) {
+                    throw 'Claude Code settings.json env must contain a JSON object.'
+                }
+                foreach ($property in $config['env'].PSObject.Properties) {
+                    $configEnv[$property.Name] = $property.Value
+                }
+            }
+
+            $configEnv['ANTHROPIC_BASE_URL'] = 'https://api.deepseek.com/anthropic'
+            $configEnv['ANTHROPIC_AUTH_TOKEN'] = $key
+            $configEnv['ANTHROPIC_MODEL'] = 'deepseek-chat'
+            $configEnv['ANTHROPIC_DEFAULT_OPUS_MODEL'] = 'deepseek-reasoner'
+            $configEnv['ANTHROPIC_DEFAULT_SONNET_MODEL'] = 'deepseek-chat'
+            $configEnv['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = 'deepseek-chat'
+            $config['env'] = $configEnv
+
+            if (-not (Test-Path -LiteralPath $claudeDir)) {
+                [void](New-Item -ItemType Directory -Path $claudeDir -Force)
+            }
+
+            $json = $config | ConvertTo-Json -Depth 100
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($settingsPath, $json, $utf8NoBom)
+
+            [void][System.Windows.Forms.MessageBox]::Show(
+                'DeepSeek API Key 配置成功！Claude Code 已切换到 DeepSeek 模型。', '特好装', 'OK', 'Information'
+            )
+            return @{ Configured = $true }
+        }
+        finally {
+            $key = $null
+        }
     }
 
     throw 'KEY_ATTEMPTS_EXHAUSTED'
