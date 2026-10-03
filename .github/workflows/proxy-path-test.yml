@@ -224,10 +224,135 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  proxy-test-macos:
+    needs: setup
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Block foreign domains (simulate GFW) [mac]
+        run: |
+          set -euo pipefail
+          sudo tee -a /etc/hosts >/dev/null <<'EOF'
+          127.0.0.1 persistent.oaistatic.com
+          127.0.0.1 dl.google.com
+          127.0.0.1 chatgpt.com
+          127.0.0.1 api.openai.com
+          127.0.0.1 auth.openai.com
+          EOF
+          sudo dscacheutil -flushcache
+
+      - name: Verify blocking works [mac]
+        run: |
+          set -euo pipefail
+          for domain in \
+            persistent.oaistatic.com \
+            dl.google.com \
+            chatgpt.com \
+            api.openai.com \
+            auth.openai.com; do
+            result="$(dscacheutil -q host -a name "$domain")"
+            echo "$result"
+            if ! grep -Eq '(^|[[:space:]])127\.0\.0\.1($|[[:space:]])' <<<"$result"; then
+              echo "$domain did not resolve to 127.0.0.1" >&2
+              exit 1
+            fi
+          done
+          curl -sSIL --max-time 30 https://codex.thz.quest/api/installer/download-claude-mac | head -5
+
+      - name: Download DMG for ${{ matrix.app }} [mac]
+        run: |
+          set -euo pipefail
+          app='${{ matrix.app }}'
+          if [[ "$app" == "chatgpt" ]]; then
+            echo "SKIP: no Mac package for chatgpt"
+            exit 0
+          fi
+
+          case "$app" in
+            claude) endpoint='download-claude-mac' ;;
+            gemini) endpoint='download-gemini-mac' ;;
+            *) echo "Unsupported app: $app" >&2; exit 1 ;;
+          esac
+
+          dmg_path="${RUNNER_TEMP}/thz-${app}.dmg"
+          http_code="$(curl -sSL -m 600 --retry 3 --retry-delay 10 \
+            -o "$dmg_path" \
+            -w "%{http_code}" \
+            "https://codex.thz.quest/api/installer/${endpoint}")"
+          if [[ "$http_code" != "200" ]]; then
+            echo "Download failed with HTTP $http_code" >&2
+            exit 1
+          fi
+
+          size="$(stat -f '%z' "$dmg_path")"
+          if (( size < 1048576 )); then
+            echo "DMG too small ($size bytes)" >&2
+            exit 1
+          fi
+          echo "Downloaded $size bytes to $dmg_path"
+          echo "DMG_PATH=$dmg_path" >> "$GITHUB_ENV"
+
+      - name: Install DMG [mac]
+        if: matrix.app != 'chatgpt'
+        run: |
+          set -euo pipefail
+          hdiutil attach "$DMG_PATH" -nobrowse -mountpoint /Volumes/THZTest
+          app_path="$(find /Volumes/THZTest -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "No app bundle found in DMG" >&2
+            hdiutil detach /Volumes/THZTest || true
+            exit 1
+          fi
+          sudo cp -R "$app_path" /Applications/
+          hdiutil detach /Volumes/THZTest || { sleep 2; hdiutil detach /Volumes/THZTest || true; }
+
+      - name: Verify app installed [mac]
+        if: matrix.app != 'chatgpt'
+        run: |
+          set -euo pipefail
+          app='${{ matrix.app }}'
+          case "$app" in
+            claude)
+              if ! ls -d /Applications/Claude*.app; then
+                echo "Claude app not found in /Applications" >&2
+                exit 1
+              fi
+              ;;
+            gemini)
+              if ! ls -d /Applications/Gemini*.app 2>/dev/null && \
+                 ! find /Applications -maxdepth 1 -iname '*gemini*' -print -quit | grep -q .; then
+                echo "Gemini app not found in /Applications" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported app: $app" >&2
+              exit 1
+              ;;
+          esac
+          echo "PROXY_PATH_TEST app=$app platform=macos RESULT=PASS"
+
+      - name: Upload DMG on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-test-macos-fail-${{ matrix.app }}
+          path: ${{ runner.temp }}/thz-*.dmg
+          if-no-files-found: ignore
+          retention-days: 7
+
   report:
     needs:
       - setup
       - proxy-test
+      - proxy-test-macos
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -235,19 +360,21 @@ jobs:
         shell: bash
         env:
           APPS: ${{ inputs.apps }}
-          RESULT: ${{ needs.proxy-test.result }}
+          WINDOWS_RESULT: ${{ needs.proxy-test.result }}
+          MACOS_RESULT: ${{ needs.proxy-test-macos.result }}
         run: |
           {
             echo "## Proxy path test summary (GFW simulation)"
             echo
             echo "- Apps: ${APPS}"
             echo "- Blocked domains: persistent.oaistatic.com, dl.google.com, chatgpt.com, api.openai.com"
-            echo "- Result: ${RESULT}"
+            echo "- Windows result: ${WINDOWS_RESULT}"
+            echo "- macOS result: ${MACOS_RESULT}"
             echo
             echo "Expected: installer detects direct connection failure and uses hysteria2 for download and installation."
           } >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$RESULT" != "success" ]]; then
-            echo "Proxy path test failed (result=${RESULT})" >&2
+          if [[ "$WINDOWS_RESULT" != "success" || "$MACOS_RESULT" != "success" ]]; then
+            echo "Proxy path test failed (windows=${WINDOWS_RESULT}, macos=${MACOS_RESULT})" >&2
             exit 1
           fi
           echo "Proxy path test passed."
