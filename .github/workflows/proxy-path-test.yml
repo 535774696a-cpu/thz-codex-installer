@@ -166,60 +166,38 @@ jobs:
             throw "installer failed with exit code $exitCode"
           }
 
-      - name: Verify proxy was used and app installed (${{ matrix.app }})
+      - name: Verify app installed via proxy path (${{ matrix.app }})
         run: |
           $ErrorActionPreference = 'Stop'
           $app = '${{ matrix.app }}'
-          $logFile = Join-Path $env:RUNNER_TEMP "full-$app.log"
-          $log = ''
-          if (Test-Path -LiteralPath $logFile) {
-            $log = Get-Content -LiteralPath $logFile -Raw
-          }
 
-          # 1. 检查代理是否被触发（日志标记）
-          $proxyMarkers = @(
-            'EMBEDDED_PROXY',
-            'download_via=embedded_proxy',
-            'proxy_status',
-            'hysteria'
-          )
-          $foundMarkers = @()
-          foreach ($marker in $proxyMarkers) {
-            if ($log -match [regex]::Escape($marker)) { $foundMarkers += $marker }
-          }
-          Write-Host "Proxy markers found: $($foundMarkers -join ', ')"
-          if ($foundMarkers.Count -eq 0) {
-            Write-Warning "NO PROXY MARKERS FOUND - proxy path may not have been exercised!"
-            # ChatGPT 必须走代理（包在境外）；没走代理就是测试失败
-            if ($app -eq 'chatgpt') {
-              throw "ChatGPT download should have used proxy (persistent.oaistatic.com blocked), but no proxy markers in log"
-            }
-          }
+          # 直接验证应用是否装上。原理：直连域名（persistent.oaistatic.com / dl.google.com）
+          # 已被 hosts 封死，能装上就证明安装器走了 hysteria2 代理链路——这是最直接的证据。
+          # （GUI 安装器在 CI 模式下不写 stdout，查日志标记不可靠，故删掉 proxyMarkers 检查。）
 
-          # 2. 验证应用已安装
           switch ($app) {
             'chatgpt' {
               $pkg = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($null -eq $pkg) { throw "ChatGPT Desktop (OpenAI.Codex) not found after install" }
-              Write-Host "INSTALLED: $($pkg.Name) v$($pkg.Version)"
+              if ($null -eq $pkg) { throw "FAIL: ChatGPT Desktop (OpenAI.Codex) not found after install. persistent.oaistatic.com was blocked, so a successful install proves the proxy path worked — but the app is missing." }
+              Write-Host "INSTALLED: $($pkg.Name) v$($pkg.Version) (proxy path proven: direct download was blocked)"
             }
             'claude' {
               $pkg = Get-AppxPackage | Where-Object { $_.Name -like '*Claude*' } | Select-Object -First 1
-              if ($null -eq $pkg) { throw "Claude Desktop not found after install" }
+              if ($null -eq $pkg) { throw "FAIL: Claude Desktop not found after install" }
               Write-Host "INSTALLED: $($pkg.Name) v$($pkg.Version)"
             }
             'gemini' {
               # Gemini 是传统 exe 安装，检查安装目录或注册表
-              $geminiPaths = @(
-                "$env:LOCALAPPDATA\Google\Chrome\Application",  # 占位，实际检查由安装器日志确认
-                "$env:ProgramFiles\Google"
-              )
-              Write-Host "Gemini install verification via installer log (online installer)"
-              if ($log -match 'GEMINI.*(SUCCESS|INSTALLED|完成)') {
-                Write-Host "INSTALLED: Gemini (per installer log)"
-              } else {
-                Write-Warning "Could not confirm Gemini install from log; manual check needed"
+              Write-Host "Gemini install verification: checking common install locations"
+              $found = $false
+              $searchRoots = @("$env:LOCALAPPDATA", "$env:ProgramFiles", "$env:ProgramFiles(x86)")
+              foreach ($root in $searchRoots) {
+                if (Test-Path -LiteralPath $root) {
+                  $hit = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*Gemini*' }
+                  if ($hit) { Write-Host "INSTALLED: found at $($hit.FullName)"; $found = $true; break }
+                }
               }
+              if (-not $found) { throw "FAIL: Gemini install location not found under LOCALAPPDATA/ProgramFiles" }
             }
           }
 
