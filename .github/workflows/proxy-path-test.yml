@@ -161,6 +161,15 @@ jobs:
 
           # 保存完整日志供后续步骤分析
           Copy-Item -LiteralPath $logFile -Destination (Join-Path $env:RUNNER_TEMP "full-$app.log") -Force -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $logFile) {
+            $diagLine = Get-Content -LiteralPath $logFile | Where-Object { $_ -like 'THZ_CI_DIAGLOG=*' } | Select-Object -Last 1
+            if ($diagLine) {
+              $diagPath = $diagLine.Substring('THZ_CI_DIAGLOG='.Length).Trim()
+              if (Test-Path -LiteralPath $diagPath -PathType Leaf) {
+                Copy-Item -LiteralPath $diagPath -Destination (Join-Path $env:RUNNER_TEMP "diagnostic-$app.log") -Force
+              }
+            }
+          }
 
           if ($exitCode -ne 0) {
             throw "installer failed with exit code $exitCode"
@@ -177,8 +186,9 @@ jobs:
 
           switch ($app) {
             'chatgpt' {
+              Get-AppxPackage | Where-Object { $_.Name -like '*OpenAI*' } | Format-Table Name, PackageFullName, Version -AutoSize
               $pkg = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($null -eq $pkg) { throw "FAIL: ChatGPT Desktop (OpenAI.Codex) not found after install. persistent.oaistatic.com was blocked, so a successful install proves the proxy path worked — but the app is missing." }
+              if ($null -eq $pkg) { throw "FAIL: ChatGPT Desktop (OpenAI.Codex) not found after install. persistent.oaistatic.com was blocked, so a successful install proves the proxy path worked -- but the app is missing." }
               Write-Host "INSTALLED: $($pkg.Name) v$($pkg.Version) (proxy path proven: direct download was blocked)"
             }
             'claude' {
@@ -208,7 +218,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: proxy-test-fail-${{ matrix.app }}
-          path: ${{ runner.temp }}/full-${{ matrix.app }}.log
+          path: |
+            ${{ runner.temp }}/full-${{ matrix.app }}.log
+            ${{ runner.temp }}/diagnostic-${{ matrix.app }}.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -226,16 +238,16 @@ jobs:
           RESULT: ${{ needs.proxy-test.result }}
         run: |
           {
-            echo "## 代理链路测试汇总 (GFW 模拟)"
+            echo "## Proxy path test summary (GFW simulation)"
             echo
-            echo "- 应用: ${APPS}"
-            echo "- 封锁域名: persistent.oaistatic.com, dl.google.com, chatgpt.com, api.openai.com"
-            echo "- 结果: ${RESULT}"
+            echo "- Apps: ${APPS}"
+            echo "- Blocked domains: persistent.oaistatic.com, dl.google.com, chatgpt.com, api.openai.com"
+            echo "- Result: ${RESULT}"
             echo
-            echo "预期：安装器检测到直连失败，自动启动 hysteria2 代理完成下载/安装。"
+            echo "Expected: installer detects direct connection failure and uses hysteria2 for download and installation."
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ "$RESULT" != "success" ]]; then
-            echo "代理链路测试失败 (result=${RESULT})" >&2
+            echo "Proxy path test failed (result=${RESULT})" >&2
             exit 1
           fi
-          echo "代理链路测试通过。"
+          echo "Proxy path test passed."

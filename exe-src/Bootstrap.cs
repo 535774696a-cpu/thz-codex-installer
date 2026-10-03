@@ -107,6 +107,12 @@ public static partial class Bootstrap {
    p.WaitForExit();lastExit=p.ExitCode;if(p.ExitCode!=0)throw new InvalidOperationException("DESKTOP_PACKAGE_VERIFY_FAILED");return output.Result.Trim();
   }
  }
+ static void CiVerifyDesktopAppx(){
+  string literal=appId.Replace("'","''");
+  string script="$p=@(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.PackageFamilyName -ceq '"+literal+"' }); if($p.Count -lt 1){exit 41}; [Console]::Out.Write($p[0].Version)";
+  try {if(String.IsNullOrWhiteSpace(ProbeDesktop(script)))throw new InvalidOperationException("CI_APPX_REGISTRATION_MISSING");}
+  catch {errorCode="CI_APPX_REGISTRATION_MISSING";throw new InvalidOperationException("CI_APPX_REGISTRATION_MISSING");}
+ }
  static void LaunchCodexDesktop(){
   string script=DesktopRegistrationScript();
   if(providerType=="gemini")script+="Start-Process -FilePath $p.InstallPath -ErrorAction Stop";
@@ -334,7 +340,7 @@ public static partial class Bootstrap {
   if(Environment.OSVersion.Platform!=PlatformID.Win32NT)return;
   Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
   try{InitLog();Stage("LICENSE","INSTALLATION_TICKET_INVALID");installationTicket=LoadInstallationTicket();Extract();bool installed=RunInstaller();installationTicket=null;bool verified=false;
-   while(!verified){try{if(!installed)throw new InvalidOperationException("INSTALL_FAILED");Stage(clientType=="desktop"?"DESKTOP_VERIFY":"CODEX_VERIFY","INSTALLATION_VERIFY_FAILED");Verify(true);Log("PASS",null);verified=true;}catch(Exception error){
+   while(!verified){try{if(!installed)throw new InvalidOperationException("INSTALL_FAILED");Stage(clientType=="desktop"?"DESKTOP_VERIFY":"CODEX_VERIFY","INSTALLATION_VERIFY_FAILED");Verify(true);Log("PASS",null);if(CiTest&&clientType=="desktop"&&providerType!="gemini")CiVerifyDesktopAppx();verified=true;}catch(Exception error){
     if(CiTest){Log("FAILED",error);try{Console.Error.WriteLine("THZ_CI_RESULT=FAIL stage="+stage+" code="+errorCode);}catch{}Environment.Exit(2);}else{var choice=Choice("安装未完成",Failure(error),new[]{"重试检测","重试安装","查看解决办法","联系客服","退出"});
     if(choice=="重试检测"){installed=true;continue;}if(choice=="重试安装"){Extract();installed=RunInstaller();continue;}if(choice=="联系客服"){Contact();continue;}if(choice=="查看解决办法"){Notice("请确认官方安装资源网络可用、测试授权有效，且不存在旧版安装冲突。\n不要关闭系统安全功能。\n诊断目录："+workspace);continue;}return;}
    }}

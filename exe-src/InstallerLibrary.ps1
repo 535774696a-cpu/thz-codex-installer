@@ -1735,22 +1735,7 @@ function Install-OfficialCodexDesktop {
     $downloadSpinner = Start-ProgressSpinner -Message '正在下载 ChatGPT Desktop 安装包...'
     try {
         try {
-            $resp = Invoke-ForeignWebRequest -Uri $url -TimeoutSec 300
-            $fileStream = $null
-            try {
-                $fileStream = [IO.File]::Create($msixPath)
-                if ($null -ne $resp.RawContentStream) {
-                    $resp.RawContentStream.Position = 0
-                    $resp.RawContentStream.CopyTo($fileStream)
-                } else {
-                    $bytes = [Text.Encoding]::GetEncoding('iso-8859-1').GetBytes([string]$resp.Content)
-                    $fileStream.Write($bytes, 0, $bytes.Length)
-                }
-            } finally {
-                if ($null -ne $fileStream) {
-                    $fileStream.Dispose()
-                }
-            }
+            Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $msixPath | Out-Null
             $downloadSpinner.Succeeded = $true
         } catch {
             throw 'DESKTOP_DOWNLOAD_FAILED'
@@ -2103,7 +2088,7 @@ function Start-GeminiDesktopApp {
 
 function Test-OfficialCodexDesktopRegistration {
     $pkg = Get-AppxPackage -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -eq 'OpenAI.ChatGPT' } |
+        Where-Object { $_.Name -eq 'OpenAI.Codex' } |
         Select-Object -First 1
     if ($null -eq $pkg) {
         $pkg = Get-AppxPackage -ErrorAction SilentlyContinue |
