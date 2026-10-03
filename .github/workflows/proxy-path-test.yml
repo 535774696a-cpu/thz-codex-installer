@@ -270,12 +270,9 @@ jobs:
         run: |
           set -euo pipefail
           app='${{ matrix.app }}'
-          if [[ "$app" == "chatgpt" ]]; then
-            echo "SKIP: no Mac package for chatgpt"
-            exit 0
-          fi
 
           case "$app" in
+            chatgpt) endpoint='download-chatgpt-mac' ;;
             claude) endpoint='download-claude-mac' ;;
             gemini) endpoint='download-gemini-mac' ;;
             *) echo "Unsupported app: $app" >&2; exit 1 ;;
@@ -300,7 +297,6 @@ jobs:
           echo "DMG_PATH=$dmg_path" >> "$GITHUB_ENV"
 
       - name: Install DMG [mac]
-        if: matrix.app != 'chatgpt'
         run: |
           set -euo pipefail
           hdiutil attach "$DMG_PATH" -nobrowse -mountpoint /Volumes/THZTest
@@ -314,11 +310,16 @@ jobs:
           hdiutil detach /Volumes/THZTest || { sleep 2; hdiutil detach /Volumes/THZTest || true; }
 
       - name: Verify app installed [mac]
-        if: matrix.app != 'chatgpt'
         run: |
           set -euo pipefail
           app='${{ matrix.app }}'
           case "$app" in
+            chatgpt)
+              if ! ls -d /Applications/ChatGPT*.app; then
+                echo "ChatGPT app not found in /Applications" >&2
+                exit 1
+              fi
+              ;;
             claude)
               if ! ls -d /Applications/Claude*.app; then
                 echo "Claude app not found in /Applications" >&2

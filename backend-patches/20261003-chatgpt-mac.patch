@@ -1,0 +1,56 @@
+--- a/app/main.py	2026-10-03 03:14:44.538351773 +0000
++++ b/app/main.py	2026-10-03 03:14:44.558351800 +0000
+@@ -74,6 +74,8 @@
+     dl_claude_win_daily_limit = SlidingWindowRateLimiter(30, 86400)   # Claude Desktop .msix per IP per day
+     dl_claude_mac_hourly_limit = SlidingWindowRateLimiter(10, 3600)   # Claude Desktop .dmg per IP per hour
+     dl_claude_mac_daily_limit = SlidingWindowRateLimiter(30, 86400)   # Claude Desktop .dmg per IP per day
++    dl_chatgpt_mac_hourly_limit = SlidingWindowRateLimiter(10, 3600)   # ChatGPT Desktop .dmg per IP per hour
++    dl_chatgpt_mac_daily_limit = SlidingWindowRateLimiter(30, 86400)   # ChatGPT Desktop .dmg per IP per day
+     dl_gemini_win_hourly_limit = SlidingWindowRateLimiter(10, 3600)   # Gemini Desktop .exe per IP per hour
+     dl_gemini_win_daily_limit = SlidingWindowRateLimiter(30, 86400)   # Gemini Desktop .exe per IP per day
+     dl_gemini_mac_hourly_limit = SlidingWindowRateLimiter(10, 3600)   # Gemini Desktop .dmg per IP per hour
+@@ -810,6 +812,44 @@
+             },
+         )
+ 
++    @app.get("/api/installer/download-chatgpt-mac", include_in_schema=False)
++    def download_chatgpt_mac(request: Request):
++        """ChatGPT Desktop macOS (.dmg) \u4e00\u952e\u4e0b\u8f7d"""
++        import os
++        import glob
++        # Test bypass: automated regression tests send X-THZ-Test (value in env THZ_TEST_BYPASS)
++        bypass = os.environ.get("THZ_TEST_BYPASS", "")
++        is_test = bool(bypass) and request.headers.get("X-THZ-Test") == bypass
++        if not is_test:
++            ip_key = privacy_hash(request_ip(request))
++            if not dl_chatgpt_mac_hourly_limit.allowed(ip_key):
++                return JSONResponse(
++                    {"ok": False, "error": "RATE_LIMITED", "message": "\u4e0b\u8f7d\u8fc7\u4e8e\u9891\u7e41\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002"},
++                    status_code=429,
++                )
++            dl_chatgpt_mac_hourly_limit.record_failure(ip_key)
++            if not dl_chatgpt_mac_daily_limit.allowed(ip_key):
++                return JSONResponse(
++                    {"ok": False, "error": "RATE_LIMITED", "message": "\u4eca\u65e5\u4e0b\u8f7d\u6b21\u6570\u5df2\u8fbe\u4e0a\u9650\uff0c\u8bf7\u660e\u5929\u518d\u8bd5\u3002"},
++                    status_code=429,
++                )
++            dl_chatgpt_mac_daily_limit.record_failure(ip_key)
++        matches = sorted(glob.glob("/opt/codex-installer/static/chatgpt/ChatGPT-mac-*.dmg"))
++        if not matches:
++            return JSONResponse({"ok": False, "error": "not_found"}, status_code=404)
++        path = matches[-1]
++        version = path.split("ChatGPT-mac-")[-1].rsplit(".dmg", 1)[0]
++        return FileResponse(
++            path,
++            media_type="application/octet-stream",
++            filename="ChatGPT-Desktop.dmg",
++            headers={
++                "Cache-Control": "no-store, private",
++                "X-Content-Type-Options": "nosniff",
++                "X-ChatGPT-Version": version,
++            },
++        )
++
+     @app.get("/api/installer/download-gemini-win", include_in_schema=False)
+     def download_gemini_win(request: Request):
+         """Gemini Desktop Windows (.exe) one-click download"""
