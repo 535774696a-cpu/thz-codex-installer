@@ -279,12 +279,37 @@ jobs:
           esac
 
           dmg_path="${RUNNER_TEMP}/thz-${app}.dmg"
-          http_code="$(curl -sSL -m 600 --retry 3 --retry-delay 10 \
-            -o "$dmg_path" \
-            -w "%{http_code}" \
-            "https://codex.thz.quest/api/installer/${endpoint}")"
-          if [[ "$http_code" != "200" ]]; then
-            echo "Download failed with HTTP $http_code" >&2
+          http_code=''
+          download_succeeded=false
+
+          for attempt in 1 2 3 4 5; do
+            rm -f "$dmg_path"
+            # --http1.1: 服务器 HTTP/2 大文件传输不稳定（curl 92 stream reset），强制 HTTP/1.1
+            # --retry-all-errors: 让 curl 92 这类错误也能被重试（默认 --retry 不覆盖）
+            # 外层 bash 循环负责重试与诊断，curl 内部不再重试
+            if http_code="$(curl -sSL -m 600 --http1.1 \
+              --retry 0 --retry-all-errors \
+              -o "$dmg_path" \
+              -w "%{http_code}" \
+              "https://codex.thz.quest/api/installer/${endpoint}")"; then
+              curl_exit=0
+            else
+              curl_exit=$?
+            fi
+
+            if [[ "$curl_exit" -eq 0 && "$http_code" == "200" ]]; then
+              download_succeeded=true
+              break
+            fi
+
+            echo "DMG download attempt ${attempt}/5 failed: curl exit code ${curl_exit}, HTTP ${http_code:-unknown}" >&2
+            if [[ "$attempt" -lt 5 ]]; then
+              sleep 10
+            fi
+          done
+
+          if [[ "$download_succeeded" != true ]]; then
+            echo "Download failed with HTTP ${http_code:-unknown}" >&2
             exit 1
           fi
 

@@ -1811,13 +1811,31 @@ function Install-ClaudeDesktop {
     $downloadStart = Get-Date
     $downloadSpinner = Start-ProgressSpinner -Message '正在下载 Claude Desktop 安装包...'
     try {
-        try {
-            # Stream directly to disk: 290MB+ package must not be buffered in memory
-            Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $msixPath | Out-Null
-            $downloadSpinner.Succeeded = $true
-        } catch {
+        # 大文件直连下载可能被中途重置：最多试 3 次，每次删掉残留的半截文件
+        $downloadSucceeded = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            if (Test-Path -LiteralPath $msixPath) {
+                Remove-Item -LiteralPath $msixPath -Force
+            }
+
+            try {
+                # Stream directly to disk: 290MB+ package must not be buffered in memory
+                Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $msixPath | Out-Null
+                $downloadSucceeded = $true
+                break
+            } catch {
+                Write-Host "stage=INSTALL operation=CLAUDE_DOWNLOAD_ATTEMPT attempt=$attempt/3 error=$($_.Exception.Message)"
+                if ($attempt -lt 3) {
+                    Start-Sleep -Seconds (5 * $attempt)
+                }
+            }
+        }
+
+        if (-not $downloadSucceeded) {
             throw 'DESKTOP_DOWNLOAD_FAILED'
         }
+
+        $downloadSpinner.Succeeded = $true
     } finally {
         Stop-ProgressSpinner -Spinner $downloadSpinner
     }
