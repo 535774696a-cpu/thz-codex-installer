@@ -1734,10 +1734,40 @@ function Install-OfficialCodexDesktop {
     $downloadStart = Get-Date
     $downloadSpinner = Start-ProgressSpinner -Message '正在下载 ChatGPT Desktop 安装包...'
     try {
-        try {
-            Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $msixPath | Out-Null
-            $downloadSpinner.Succeeded = $true
-        } catch {
+        # 大文件经代理下载可能被截断/返回错误页（不抛异常但文件缺失或过小）：
+        # 最多试 3 次，每次删掉残留的半截文件，尝试后校验大小
+        $downloadSucceeded = $false
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            if (Test-Path -LiteralPath $msixPath) {
+                Remove-Item -LiteralPath $msixPath -Force
+            }
+
+            try {
+                Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $msixPath | Out-Null
+
+                if (-not (Test-Path -LiteralPath $msixPath)) {
+                    Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 reason=missing size=0"
+                } else {
+                    [long]$downloadSize = (Get-Item -LiteralPath $msixPath).Length
+                    if ($downloadSize -gt 10MB) {
+                        $downloadSucceeded = $true
+                        $downloadSpinner.Succeeded = $true
+                        break
+                    }
+
+                    Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 reason=too_small size=$downloadSize"
+                    Remove-Item -LiteralPath $msixPath -Force
+                }
+            } catch {
+                Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 error=$($_.Exception.Message)"
+            }
+
+            if ($attempt -lt 3) {
+                Start-Sleep -Seconds (5 * $attempt)
+            }
+        }
+
+        if (-not $downloadSucceeded) {
             throw 'DESKTOP_DOWNLOAD_FAILED'
         }
     } finally {
