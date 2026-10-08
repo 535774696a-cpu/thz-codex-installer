@@ -264,7 +264,23 @@ jobs:
               exit 1
             fi
           done
-          curl -sSIL --max-time 30 https://codex.thz.quest/api/installer/download-claude-mac | head -5
+          # 确认 codex.thz.quest 未被封（必须可达）；加重试，避免偶发 DNS 抖动导致整个 job 误判失败
+          probe_ok=false
+          for attempt in 1 2 3 4 5; do
+            # 用 if 包裹管道，避免 set -e 在探测失败时直接退出（pipefail 下管道返回 curl 的退出码）
+            if curl -sSIL --max-time 30 https://codex.thz.quest/api/installer/download-claude-mac | head -5; then
+              probe_ok=true
+              break
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "codex.thz.quest 探测第 $attempt 次失败，10 秒后重试" >&2
+              sleep 10
+            fi
+          done
+          if [ "$probe_ok" != "true" ]; then
+            echo "codex.thz.quest 连续 5 次探测失败" >&2
+            exit 1
+          fi
 
       - name: Download DMG for ${{ matrix.app }} [mac]
         run: |
