@@ -1714,6 +1714,35 @@ function Format-Duration {
     return ('{0} 秒' -f $seconds)
 }
 
+function Test-AppxInstallPrerequisites {
+    # APPX/MSIX 侧加载环境预检：在安装前记录环境信息，帮助诊断真实机器上的
+    # DESKTOP_APPX_INSTALL_FAILED（精简版系统 / 旧 Build / 部署服务被禁等）。
+    $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    if ($null -ne $osInfo) {
+        $osBuild = [int]$osInfo.BuildNumber
+        $osCaption = ([string]$osInfo.Caption -replace '\s+', '_')
+        Write-Host "stage=INSTALL operation=APPX_PREFLIGHT check=os_version caption=$osCaption build=$osBuild"
+        if ($osBuild -lt 17763) {
+            throw 'DESKTOP_WINDOWS_TOO_OLD'
+        }
+    } else {
+        Write-Host 'stage=INSTALL operation=APPX_PREFLIGHT check=os_version status=query_failed'
+    }
+
+    $appxSvc = Get-Service -Name AppXSVC -ErrorAction SilentlyContinue
+    if ($null -eq $appxSvc) {
+        Write-Host 'stage=INSTALL operation=APPX_PREFLIGHT check=appxsvc status=not_found warning=service_missing'
+    } else {
+        Write-Host ("stage=INSTALL operation=APPX_PREFLIGHT check=appxsvc status={0} starttype={1}" -f $appxSvc.Status, $appxSvc.StartType)
+        if ($appxSvc.StartType -eq 'Disabled') {
+            Write-Host 'stage=INSTALL operation=APPX_PREFLIGHT check=appxsvc warning=service_disabled'
+        }
+    }
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    Write-Host "stage=INSTALL operation=APPX_PREFLIGHT check=admin is_admin=$isAdmin"
+}
+
 function Install-OfficialCodexDesktop {
     $processorArch = [string]$env:PROCESSOR_ARCHITECTURE
     if ($processorArch -eq 'ARM64') {
@@ -1801,6 +1830,8 @@ function Install-OfficialCodexDesktop {
         throw 'DESKTOP_MSIX_FORMAT_INVALID'
     }
 
+    Test-AppxInstallPrerequisites
+
     $installStart = Get-Date
     $installSpinner = Start-ProgressSpinner -Message '正在安装 ChatGPT Desktop...'
     try {
@@ -1808,6 +1839,10 @@ function Install-OfficialCodexDesktop {
             Add-AppxPackage -Path $msixPath -ErrorAction Stop
             $installSpinner.Succeeded = $true
         } catch {
+            $realErr = $_.Exception.Message
+            if ($_.Exception.InnerException) { $realErr += " | Inner: " + $_.Exception.InnerException.Message }
+            $realErr = $realErr -replace '\r?\n', ' '
+            Write-Host "stage=INSTALL operation=APPX_INSTALL_ERROR detail=$realErr"
             throw 'DESKTOP_APPX_INSTALL_FAILED'
         }
     } finally {
@@ -1897,6 +1932,8 @@ function Install-ClaudeDesktop {
         throw 'DESKTOP_MSIX_FORMAT_INVALID'
     }
 
+    Test-AppxInstallPrerequisites
+
     $installStart = Get-Date
     $installSpinner = Start-ProgressSpinner -Message '正在安装 Claude Desktop...'
     try {
@@ -1904,6 +1941,10 @@ function Install-ClaudeDesktop {
             Add-AppxPackage -Path $msixPath -ErrorAction Stop
             $installSpinner.Succeeded = $true
         } catch {
+            $realErr = $_.Exception.Message
+            if ($_.Exception.InnerException) { $realErr += " | Inner: " + $_.Exception.InnerException.Message }
+            $realErr = $realErr -replace '\r?\n', ' '
+            Write-Host "stage=INSTALL operation=APPX_INSTALL_ERROR detail=$realErr"
             throw 'DESKTOP_APPX_INSTALL_FAILED'
         }
     } finally {
