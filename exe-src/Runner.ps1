@@ -41,6 +41,21 @@ function Write-InstallProcessEvent {
         [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
     } catch {}
 }
+function Write-AppxDiagnosticEvent {
+    param([string]$Operation,[string]$Fields='',[string]$Detail='')
+    try {
+        if ([string]::IsNullOrWhiteSpace($env:THZ_DIAGNOSTIC_LOG)) { return }
+        if (@('APPX_PREFLIGHT','APPX_INSTALL_ERROR') -notcontains $Operation) { return }
+        $line=[DateTime]::UtcNow.ToString('o')+' stage=INSTALL operation='+$Operation
+        if ($Operation -eq 'APPX_INSTALL_ERROR') {
+            $safeDetail=(ConvertTo-SafeInstallSummary $Detail) -replace '"', "'"
+            $line+=' detail="'+$safeDetail+'"'
+        } elseif (-not [string]::IsNullOrWhiteSpace($Fields)) {
+            $line+=' '+$Fields
+        }
+        [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
+    } catch {}
+}
 function Write-LicenseRequestEvent {
     param([string]$Operation,[string]$State,[string]$Path,[string]$Status='NONE',[bool]$Received=$false,[string]$ExceptionType='NONE',[string]$ServerCode='NONE')
     # Fixed operation/path pairs. No request body, response text, headers or credentials.

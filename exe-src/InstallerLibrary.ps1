@@ -696,6 +696,9 @@ function Invoke-ForeignWebRequest {
 
         [int]$TimeoutSec = 30,
 
+        [ValidateSet('GET', 'HEAD')]
+        [string]$Method = 'GET',
+
         [string]$OutFile = ''
     )
 
@@ -705,6 +708,7 @@ function Invoke-ForeignWebRequest {
 
         $iwrParams = @{
             Uri = $Uri
+            Method = $Method
             UseBasicParsing = $true
             TimeoutSec = $TimeoutSec
             ErrorAction = 'Stop'
@@ -720,6 +724,7 @@ function Invoke-ForeignWebRequest {
 
         $iwrParams = @{
             Uri = $Uri
+            Method = $Method
             UseBasicParsing = $true
             TimeoutSec = $TimeoutSec
             ErrorAction = 'Stop'
@@ -739,6 +744,7 @@ function Invoke-ForeignWebRequest {
 
         $iwrParams = @{
             Uri = $Uri
+            Method = $Method
             Proxy = $embeddedProxyUrl
             UseBasicParsing = $true
             TimeoutSec = $TimeoutSec
@@ -760,6 +766,7 @@ function Invoke-ForeignWebRequest {
 
         $iwrParams = @{
             Uri = $Uri
+            Method = $Method
             Proxy = $legacyProxyUrl
             UseBasicParsing = $true
             TimeoutSec = $TimeoutSec
@@ -1721,26 +1728,26 @@ function Test-AppxInstallPrerequisites {
     if ($null -ne $osInfo) {
         $osBuild = [int]$osInfo.BuildNumber
         $osCaption = ([string]$osInfo.Caption -replace '\s+', '_')
-        Write-Host "stage=INSTALL operation=APPX_PREFLIGHT check=os_version caption=$osCaption build=$osBuild"
+        Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=os_version caption=$osCaption build=$osBuild"
         if ($osBuild -lt 17763) {
             throw 'DESKTOP_WINDOWS_TOO_OLD'
         }
     } else {
-        Write-Host 'stage=INSTALL operation=APPX_PREFLIGHT check=os_version status=query_failed'
+        Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=os_version status=query_failed'
     }
 
     $appxSvc = Get-Service -Name AppXSVC -ErrorAction SilentlyContinue
     if ($null -eq $appxSvc) {
-        Write-Host 'stage=INSTALL operation=APPX_PREFLIGHT check=appxsvc status=not_found warning=service_missing'
+        Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=appxsvc status=not_found warning=service_missing'
     } else {
-        Write-Host ("stage=INSTALL operation=APPX_PREFLIGHT check=appxsvc status={0} starttype={1}" -f $appxSvc.Status, $appxSvc.StartType)
+        Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields ("check=appxsvc status={0} starttype={1}" -f $appxSvc.Status, $appxSvc.StartType)
         if ($appxSvc.StartType -eq 'Disabled') {
-            Write-Host 'stage=INSTALL operation=APPX_PREFLIGHT check=appxsvc warning=service_disabled'
+            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=appxsvc warning=service_disabled'
         }
     }
 
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    Write-Host "stage=INSTALL operation=APPX_PREFLIGHT check=admin is_admin=$isAdmin"
+    Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=admin is_admin=$isAdmin"
 }
 
 function Install-OfficialCodexDesktop {
@@ -1778,7 +1785,18 @@ function Install-OfficialCodexDesktop {
                     Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 reason=missing size=0"
                 } else {
                     [long]$downloadSize = (Get-Item -LiteralPath $msixPath).Length
-                    if ($downloadSize -gt 10MB) {
+                    [long]$expectedSize = 0
+                    try {
+                        $headResponse = Invoke-ForeignWebRequest -Uri $url -Method HEAD -TimeoutSec 30
+                        [long]::TryParse([string]$headResponse.Headers['Content-Length'], [ref]$expectedSize) | Out-Null
+                    } catch {
+                        $expectedSize = 0
+                    }
+
+                    if ($expectedSize -gt 0 -and $downloadSize -ne $expectedSize) {
+                        Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 reason=size_mismatch size=$downloadSize expected_size=$expectedSize"
+                        Remove-Item -LiteralPath $msixPath -Force
+                    } elseif ($downloadSize -gt 10MB) {
                         $downloadSucceeded = $true
                         $downloadSpinner.Succeeded = $true
                         break
@@ -1842,7 +1860,7 @@ function Install-OfficialCodexDesktop {
             $realErr = $_.Exception.Message
             if ($_.Exception.InnerException) { $realErr += " | Inner: " + $_.Exception.InnerException.Message }
             $realErr = $realErr -replace '\r?\n', ' '
-            Write-Host "stage=INSTALL operation=APPX_INSTALL_ERROR detail=$realErr"
+            Write-AppxDiagnosticEvent -Operation 'APPX_INSTALL_ERROR' -Detail $realErr
             throw 'DESKTOP_APPX_INSTALL_FAILED'
         }
     } finally {
@@ -1944,7 +1962,7 @@ function Install-ClaudeDesktop {
             $realErr = $_.Exception.Message
             if ($_.Exception.InnerException) { $realErr += " | Inner: " + $_.Exception.InnerException.Message }
             $realErr = $realErr -replace '\r?\n', ' '
-            Write-Host "stage=INSTALL operation=APPX_INSTALL_ERROR detail=$realErr"
+            Write-AppxDiagnosticEvent -Operation 'APPX_INSTALL_ERROR' -Detail $realErr
             throw 'DESKTOP_APPX_INSTALL_FAILED'
         }
     } finally {
