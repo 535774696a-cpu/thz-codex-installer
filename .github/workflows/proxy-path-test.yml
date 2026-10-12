@@ -50,7 +50,9 @@ jobs:
   proxy-test:
     needs: setup
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 安装器下载重试预算为 3×600s≈30min（代理抖动时可能跑满）；
+    # job 超时必须大于该预算，否则三连 stall 会被掐成无诊断的 cancelled。
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -227,7 +229,8 @@ jobs:
   proxy-test-macos:
     needs: setup
     runs-on: macos-latest
-    timeout-minutes: 30
+    # 同上：给足安装器重试预算，避免 stall 时被掐成无诊断的 cancelled。
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       max-parallel: 3
