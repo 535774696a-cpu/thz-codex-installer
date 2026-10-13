@@ -216,13 +216,15 @@ jobs:
           Write-Host "PROXY_PATH_TEST app=$app RESULT=PASS"
 
       - name: Upload installer logs on failure
-        if: failure()
+        # 超时掐杀是 cancelled 不是 failure；取消也传日志，否则安装器内部诊断跟着 runner 一起销毁。
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: proxy-test-fail-${{ matrix.app }}
           path: |
             ${{ runner.temp }}/full-${{ matrix.app }}.log
             ${{ runner.temp }}/diagnostic-${{ matrix.app }}.log
+            ${{ env.LOCALAPPDATA }}\THZ\InstallerLogs\*.log
           if-no-files-found: ignore
           retention-days: 7
 
