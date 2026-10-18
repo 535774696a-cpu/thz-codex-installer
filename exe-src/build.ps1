@@ -42,7 +42,31 @@ try {
         [System.IO.File]::WriteAllText($path, $text, $utf8Bom)
     }
 
+    $runnerPath = Join-Path $stage 'Runner.ps1'
+    $runnerText = [System.IO.File]::ReadAllText($runnerPath)
+    if ($runnerText.Contains("`r`n")) { $runnerEol = "`r`n" } else { $runnerEol = "`n" }
+    # Match the entire production guard, including its error, to avoid patching unrelated checks.
+    $licenseGuard = [string]::Join($runnerEol, @(
+        '    if ($baseUri.Scheme -ne ''https'' -or $baseUri.DnsSafeHost -cne ''codex.thz.quest'') {'
+        '        throw ''BASE_URL 配置错误：服务地址必须为 https://codex.thz.quest。'''
+        '    }'
+    ))
+    $licenseGuardPattern = [regex]::Escape($licenseGuard)
+    $licenseGuardCount = [regex]::Matches($runnerText, $licenseGuardPattern).Count
+
     if ($TestHook) {
+        if ($licenseGuardCount -ne 1) {
+            throw "TestHook: expected 1 production license BASE_URL guard, found $licenseGuardCount"
+        }
+        # Only staged CI resources accept the exact build-time URL (including scheme/port/path).
+        $testLicenseGuard = [string]::Join($runnerEol, @(
+            ('    if (-not $baseUri.IsAbsoluteUri -or $baseUri.Scheme -notin @(''http'', ''https'') -or $baseUri.AbsoluteUri -cne ([Uri]''' + $escapedBaseUrl + ''').AbsoluteUri) {')
+            '        throw ''BASE_URL 配置错误：服务地址必须与 TestHook 构建注入的地址一致。'''
+            '    }'
+        ))
+        $runnerText = $runnerText.Replace($licenseGuard, $testLicenseGuard)
+        [System.IO.File]::WriteAllText($runnerPath, $runnerText, $utf8Bom)
+
         Write-Host "Applying CI test hook to staged InstallerLibrary.ps1"
         $hookPath = Join-Path $stage 'InstallerLibrary.ps1'
         $hookText = [System.IO.File]::ReadAllText($hookPath)
@@ -81,7 +105,11 @@ try {
 
         $hookedText = [string]::Join($hookEol, $hookList.ToArray())
         [System.IO.File]::WriteAllText($hookPath, $hookedText, $utf8Bom)
-        Write-Host "TestHook applied: 4 edits"
+        Write-Host "TestHook applied: 5 edits"
+    } else {
+        if ($licenseGuardCount -ne 1) {
+            throw "Production build: expected 1 strict license BASE_URL guard, found $licenseGuardCount"
+        }
     }
 
     Write-Host "Calculating embedded resource hashes"
