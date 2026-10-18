@@ -42,7 +42,7 @@ jobs:
       run:
         shell: powershell
     env:
-      STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+      STAGING_API_BASE_URL: 'http://64.83.34.90:18081'
 
     steps:
       - name: Checkout
@@ -51,7 +51,7 @@ jobs:
       - name: Compile
         run: |
           $ErrorActionPreference = 'Stop'
-          .\exe-src\build.ps1 -BaseUrl 'http://64.83.26.242:18081' -TestHook -OutDir (Join-Path $PWD 'dist')
+          .\exe-src\build.ps1 -BaseUrl 'http://64.83.34.90:18081' -TestHook -OutDir (Join-Path $PWD 'dist')
 
       - name: Mint installation token
         run: |
