@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -10,7 +10,7 @@ using System.Xml;
 using System.Security.AccessControl;
 using System.Security.Principal;
 [assembly: AssemblyTitle("特好装 Codex 测试安装程序")]
-[assembly: AssemblyVersion("4.6.0.0")]
+[assembly: AssemblyVersion("4.6.1.0")]
 public static partial class Bootstrap {
  static string stage="UNEXPECTED", errorCode="UNEXPECTED_FAILED", logPath;
  static readonly bool CiTest = string.Equals(Environment.GetEnvironmentVariable("THZ_CI_TEST"), "1", StringComparison.Ordinal);
@@ -32,19 +32,24 @@ public static partial class Bootstrap {
  }
  static void Log(string result,Exception error){
   if(result=="PASS")errorCode="NONE";
-  try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.0.0 windows="+RealOsBuild+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
+  try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.1.0 windows="+RealOsBuild+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
  }
  static void LogDetail(string code,string candidate,Exception error){
   try{
    string msg=error==null?"NONE":(error.GetType().FullName+": "+(error.Message??"")).Replace("\r"," ").Replace("\n"," ");
    if(msg.Length>600)msg=msg.Substring(0,600);
    string cand=(candidate??"NONE").Replace("\r"," ").Replace("\n"," ");
-   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.0.0 windows="+RealOsBuild+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
+   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.1.0 windows="+RealOsBuild+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
   }catch{}
  }
  static void Stage(string value,string code){stage=value;errorCode=code;Log("PENDING",null);}
  static string Failure(Exception error){
+  if(error is InvalidOperationException&&error.Message=="INSTALLATION_TICKET_TRUNCATED")errorCode="INSTALLATION_TICKET_TRUNCATED";
   Log("FAILED",error);
+  if(errorCode=="INSTALLATION_TICKET_TRUNCATED")return "安装包不完整（下载被中断），请重新下载完整安装包再试。\n如反复出现，请联系客服 QQ：89523844";
+  if(errorCode=="DESKTOP_APPX_DEPENDENCY_FAILED")return "应用安装未完成。\n缺少运行组件或安装包损坏，建议先重装一次安装器。\n仍失败请联系客服 QQ：89523844";
+  if(errorCode=="DESKTOP_APPX_CERT_FAILED")return "应用安装未完成。\n系统时间不对或证书问题，请校准系统时间并安装 Windows 更新后重试。\n如反复出现，请联系客服 QQ：89523844";
+  if(errorCode=="DESKTOP_APPX_SERVICE_DISABLED")return "应用安装未完成。\n系统部署服务被禁用，请联系系统管理员检查 AppXSVC、ClipSVC 等部署服务后重试。\n如需帮助，请联系客服 QQ：89523844";
   return "安装未完成。\n错误阶段："+stage+"\n错误代码："+errorCode+"\nSAFE_MESSAGE：当前阶段未完成，请截图此窗口联系客服。\nQQ：89523844\n"+(logPath!=null&&File.Exists(logPath)?"诊断日志已保留。\n诊断日志："+logPath:"诊断日志无法写入，请保留此窗口截图。");
  }
  static void ChildFailure(){
@@ -55,15 +60,18 @@ public static partial class Bootstrap {
  static string workspace, temp, exe, config, models, configHash, modelsHash, version, installationTicket, clientType, providerType, appId;
  static string LoadInstallationTicket(){
   byte[] magic=System.Text.Encoding.ASCII.GetBytes("THZTICKETV1!");string self=Assembly.GetExecutingAssembly().Location;
+  try{
   using(var stream=new FileStream(self,FileMode.Open,FileAccess.Read,FileShare.Read)){
-   if(stream.Length<magic.Length+4+32)throw new InvalidOperationException("INSTALLATION_TICKET_MISSING");
-   stream.Seek(-magic.Length,SeekOrigin.End);byte[] found=new byte[magic.Length];if(stream.Read(found,0,found.Length)!=found.Length)throw new InvalidOperationException("INSTALLATION_TICKET_INVALID");
-   for(int i=0;i<magic.Length;i++)if(found[i]!=magic[i])throw new InvalidOperationException("INSTALLATION_TICKET_MISSING");
-   stream.Seek(-(magic.Length+4),SeekOrigin.End);byte[] lengthBytes=new byte[4];if(stream.Read(lengthBytes,0,4)!=4)throw new InvalidOperationException("INSTALLATION_TICKET_INVALID");
-   int length=BitConverter.ToInt32(lengthBytes,0);if(length<32||length>128||stream.Length<magic.Length+4+length)throw new InvalidOperationException("INSTALLATION_TICKET_INVALID");
-   stream.Seek(-(magic.Length+4+length),SeekOrigin.End);byte[] bytes=new byte[length];if(stream.Read(bytes,0,length)!=length)throw new InvalidOperationException("INSTALLATION_TICKET_INVALID");
+   if(stream.Length<magic.Length+4+32)throw new InvalidOperationException("INSTALLATION_TICKET_TRUNCATED");
+   stream.Seek(-magic.Length,SeekOrigin.End);byte[] found=new byte[magic.Length];if(stream.Read(found,0,found.Length)!=found.Length)throw new InvalidOperationException("INSTALLATION_TICKET_TRUNCATED");
+   for(int i=0;i<magic.Length;i++)if(found[i]!=magic[i])throw new InvalidOperationException("INSTALLATION_TICKET_TRUNCATED");
+   stream.Seek(-(magic.Length+4),SeekOrigin.End);byte[] lengthBytes=new byte[4];if(stream.Read(lengthBytes,0,4)!=4)throw new InvalidOperationException("INSTALLATION_TICKET_TRUNCATED");
+   int length=BitConverter.ToInt32(lengthBytes,0);if(length<32||length>128||stream.Length<magic.Length+4+length)throw new InvalidOperationException("INSTALLATION_TICKET_TRUNCATED");
+   stream.Seek(-(magic.Length+4+length),SeekOrigin.End);byte[] bytes=new byte[length];if(stream.Read(bytes,0,length)!=length)throw new InvalidOperationException("INSTALLATION_TICKET_TRUNCATED");
    string ticket=System.Text.Encoding.ASCII.GetString(bytes);if(!System.Text.RegularExpressions.Regex.IsMatch(ticket,"\\A[A-Za-z0-9_-]{32,128}\\z"))throw new InvalidOperationException("INSTALLATION_TICKET_INVALID");return ticket;
   }
+  }catch(IOException){throw new InvalidOperationException("INSTALLATION_TICKET_TRUNCATED");}
+  catch(UnauthorizedAccessException){throw new InvalidOperationException("INSTALLATION_TICKET_TRUNCATED");}
  }
  static List<OwnedFile> owned=new List<OwnedFile>();
  static string Hash(string path){return Safety.Hash(path);}
@@ -361,6 +369,6 @@ public static partial class Bootstrap {
    Safety.NoLinks(workspace,temp);if(Directory.GetFileSystemEntries(temp).Length==0)Directory.Delete(temp,false);
    bool leftovers=Directory.GetFileSystemEntries(workspace).Length>0;if(!leftovers)Directory.Delete(workspace,false);
    Stage("FINAL_VERIFY","POST_CLEANUP_VERIFY_FAILED");Verify(false);Log("PASS",null);CompleteAndOptionallyLaunch("清理后再次验证通过。\n应用与用户配置均已保留。"+(leftovers?"\n未追踪的文件已安全保留。":""));
-  }catch(Exception error){if(CiTest){Log("FAILED",error);try{Console.Error.WriteLine("THZ_CI_RESULT=FAIL stage="+stage+" code="+errorCode);}catch{}Environment.Exit(1);}Notice(Failure(error));}
+  }catch(Exception error){if(error is InvalidOperationException&&error.Message=="INSTALLATION_TICKET_TRUNCATED")errorCode="INSTALLATION_TICKET_TRUNCATED";if(CiTest){Log("FAILED",error);try{Console.Error.WriteLine("THZ_CI_RESULT=FAIL stage="+stage+" code="+errorCode);}catch{}Environment.Exit(1);}Notice(Failure(error));}
  }
 }

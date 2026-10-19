@@ -1,0 +1,28 @@
+# 目标文件：/opt/codex-installer/app/main.py，installer_fail 函数（约 1056 行）。
+# 应用前需在目标机核对锚定行；先备份目标文件。
+# 应用方式：cd /opt/codex-installer && patch --dry-run -p1 < /path/to/20261019-appx-fail-detail.py.patch
+# dry-run 成功后：patch -p1 < /path/to/20261019-appx-fail-detail.py.patch
+--- a/app/main.py
++++ b/app/main.py
+@@ -1073,6 +1073,7 @@
+ 
+             error_code = str(body.get("error_code", ""))[:64]
+             message = str(body.get("message", ""))[:200]
++            detail = str(body.get('detail', ''))[:1000].replace('\r', ' ').replace('\n', ' ')
+             installer_version = str(body.get("installer_version", ""))[:32]
+ 
+             install_fail_events[token_prefix] = {
+@@ -1094,11 +1095,12 @@
+                     del install_fail_events[key]
+ 
+             logger.warning(
+-                "installer fail step=%s code=%s ver=%s token=%s",
++                "installer fail step=%s code=%s ver=%s token=%s detail=%s",
+                 step,
+                 error_code,
+                 installer_version,
+                 token_prefix,
++                detail,
+             )
+         except Exception:
+             pass

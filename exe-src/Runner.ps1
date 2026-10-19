@@ -1,8 +1,8 @@
 ﻿#requires -Version 5.1
 $ErrorActionPreference = 'Stop'
 $script:phase='PREFLIGHT'; $script:diagnosticCode='POWERSHELL_INITIALIZATION_FAILED'
-# 与 C# 启动器 AssemblyVersion 保持一致（P0 移植：版本号统一 4.6.0.0）。
-$script:InstallerVersion='4.6.0.0'
+# 与 C# 启动器 AssemblyVersion 保持一致（P0 移植：版本号统一 4.6.1.0）。
+$script:InstallerVersion='4.6.1.0'
 # 真实 BuildNumber：[Environment]::OSVersion.Version 在无 Win10+ manifest 时被兼容垫片固定为 6.2.9200，日志改用 CIM 取真实值
 function Get-RealOsBuild {
     try {
@@ -13,7 +13,7 @@ function Get-RealOsBuild {
 }
 function Write-SafeDiagnostic([string]$Result,[string]$ExceptionType='NONE',[string]$ExitCode='NONE') {
     try {
-        $line = [DateTime]::UtcNow.ToString('o')+' installer=4.6.0.0 windows='+(Get-RealOsBuild)+' stage='+$script:phase+' code='+$(if($Result -eq 'PENDING'){'NONE'}else{$script:diagnosticCode})+' exit='+$ExitCode+' exception='+$ExceptionType+' workspace='+$PSScriptRoot+' verification='+$Result
+        $line = [DateTime]::UtcNow.ToString('o')+' installer=4.6.1.0 windows='+(Get-RealOsBuild)+' stage='+$script:phase+' code='+$(if($Result -eq 'PENDING'){'NONE'}else{$script:diagnosticCode})+' exit='+$ExitCode+' exception='+$ExceptionType+' workspace='+$PSScriptRoot+' verification='+$Result
         [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
     } catch {}
 }
@@ -29,6 +29,18 @@ function ConvertTo-SafeInstallSummary([string]$Text) {
         -replace '(?i)(api[_-]?key|authorization|token|cookie|license(?:[_-]?code)?|password|secret)\s*[:=]\s*[^\s;]+', '$1=[REDACTED]'
     $safe = ($safe -replace '[\r\n\t]+', ' ' -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', '').Trim()
     if ($safe.Length -gt 2000) { $safe = $safe.Substring($safe.Length - 2000) }
+    return $safe
+}
+function ConvertTo-SafeDiagDetail([string]$Text) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    # Redact before truncating so a cut cannot expose part of a credential.
+    $safe = $Text `
+        -replace '(?i)Bearer\s+[A-Za-z0-9._~+\-/=]+', 'Bearer [REDACTED]' `
+        -replace '(?i)(api[_-]?key|authorization|token|cookie|license(?:[_-]?code)?|password|secret)\s*[:=]\s*[^\s;]+', '$1=[REDACTED]'
+    $safe = ($safe -replace '[\r\n\t]+', ' ' -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', '').Trim()
+    $safe = $safe -replace '([A-Za-z]:\\Users\\)[^\\/:*?"<>|]+', '$1<user>'
+    $safe = $safe -replace 'sk-[A-Za-z0-9_\-\.]{4,}', 'sk-****'
+    if ($safe.Length -gt 800) { $safe = $safe.Substring($safe.Length - 800) }
     return $safe
 }
 function Write-InstallProcessEvent {
@@ -48,7 +60,7 @@ function Write-AppxDiagnosticEvent {
         if (@('APPX_PREFLIGHT','APPX_INSTALL_ERROR') -notcontains $Operation) { return }
         $line=[DateTime]::UtcNow.ToString('o')+' stage=INSTALL operation='+$Operation
         if ($Operation -eq 'APPX_INSTALL_ERROR') {
-            $safeDetail=(ConvertTo-SafeInstallSummary $Detail) -replace '"', "'"
+            $safeDetail=(ConvertTo-SafeDiagDetail $Detail) -replace '"', "'"
             $line+=' detail="'+$safeDetail+'"'
         } elseif (-not [string]::IsNullOrWhiteSpace($Fields)) {
             $line+=' '+$Fields
@@ -402,16 +414,19 @@ function Invoke-InstallFailReport {
         $code = [string]$script:diagnosticCode
         if ([string]::IsNullOrWhiteSpace($code)) { $code = 'UNKNOWN' }
         if ($code.Length -gt 64) { $code = $code.Substring(0, 64) }
-        # 只上报固定阶段码与诊断码，不含异常消息原文（与现有诊断策略一致）；
+        # message 保留固定阶段码；detail 单独经过脱敏后按需上报。
         # 纵深脱敏：sk-**** 正则再过一遍。
         $msg = [regex]::Replace(("phase={0} code={1}" -f $script:phase, $code), 'sk-[A-Za-z0-9_\-\.]{4,}', 'sk-****')
-        $body = @{
+        $payload = @{
             install_token     = $token
             step              = (Get-FailStepForPhase $script:phase)
             error_code        = $code
             message           = $msg
             installer_version = $script:InstallerVersion
-        } | ConvertTo-Json
+        }
+        $detail = ConvertTo-SafeDiagDetail ([string]$script:AppxFailDetail)
+        if (-not [string]::IsNullOrWhiteSpace($detail)) { $payload.detail = $detail }
+        $body = $payload | ConvertTo-Json
         $null = Invoke-RestMethod -Uri "$base/api/installer/fail" `
             -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 15
     } catch {
@@ -549,9 +564,9 @@ Add-Type -AssemblyName System.Drawing
     exit 0
 } catch {
     # Only fixed codes and exception type; never exception messages, bodies or invocation data.
-    $known=@('CONFIG_HOME_INVALID','INSTALLATION_TICKET_INVALID','INSTALL_PLAN_MISMATCH','EXISTING_CODEX_CONFLICT','PROVIDER_INVALID','CONFIG_LOCATION_INVALID','CONFIG_INVALID','MODEL_INVALID','PROVIDER_URL_INVALID','CATALOG_PATH_INVALID','MODEL_CATALOG_INVALID','KEY_INPUT_CANCELLED','KEY_VALIDATION_FAILED','KEY_ATTEMPTS_EXHAUSTED','VERIFY_EXECUTABLE_MISSING','VERIFY_START_FAILED','VERIFY_TIMEOUT','VERIFY_EXIT_CODE','VERIFY_INVALID_VERSION','OFFICIAL_INSTALL_START_FAILED','OFFICIAL_INSTALL_TIMEOUT','OFFICIAL_INSTALL_FAILED','OFFICIAL_INSTALL_OUTPUT_MISSING','DESKTOP_ARCH_UNSUPPORTED','DESKTOP_SOURCE_INVALID','DESKTOP_DOWNLOAD_FAILED','DESKTOP_PACKAGE_TOO_SMALL','DESKTOP_MSIX_FORMAT_INVALID','DESKTOP_PACKAGE_IDENTITY_INVALID','DESKTOP_SIGNATURE_INVALID','DESKTOP_PUBLISHER_INVALID','DESKTOP_APPX_UNAVAILABLE','DESKTOP_APPX_INSTALL_FAILED','DESKTOP_ARCH_MISMATCH','DESKTOP_PACKAGE_VERIFY_FAILED','DESKTOP_APP_REGISTRATION_MISSING','DESKTOP_VERIFY_FAILED')
+    $known=@('CONFIG_HOME_INVALID','INSTALLATION_TICKET_INVALID','INSTALL_PLAN_MISMATCH','EXISTING_CODEX_CONFLICT','PROVIDER_INVALID','CONFIG_LOCATION_INVALID','CONFIG_INVALID','MODEL_INVALID','PROVIDER_URL_INVALID','CATALOG_PATH_INVALID','MODEL_CATALOG_INVALID','KEY_INPUT_CANCELLED','KEY_VALIDATION_FAILED','KEY_ATTEMPTS_EXHAUSTED','VERIFY_EXECUTABLE_MISSING','VERIFY_START_FAILED','VERIFY_TIMEOUT','VERIFY_EXIT_CODE','VERIFY_INVALID_VERSION','OFFICIAL_INSTALL_START_FAILED','OFFICIAL_INSTALL_TIMEOUT','OFFICIAL_INSTALL_FAILED','OFFICIAL_INSTALL_OUTPUT_MISSING','DESKTOP_WINDOWS_TOO_OLD','DESKTOP_ARCH_UNSUPPORTED','DESKTOP_SOURCE_INVALID','DESKTOP_DOWNLOAD_FAILED','DESKTOP_PACKAGE_TOO_SMALL','DESKTOP_MSIX_FORMAT_INVALID','DESKTOP_PACKAGE_IDENTITY_INVALID','DESKTOP_SIGNATURE_INVALID','DESKTOP_PUBLISHER_INVALID','DESKTOP_APPX_UNAVAILABLE','DESKTOP_APPX_INSTALL_FAILED','DESKTOP_APPX_DEPENDENCY_FAILED','DESKTOP_APPX_CERT_FAILED','DESKTOP_APPX_SERVICE_DISABLED','DESKTOP_ARCH_MISMATCH','DESKTOP_PACKAGE_VERIFY_FAILED','DESKTOP_APP_REGISTRATION_MISSING','DESKTOP_VERIFY_FAILED')
     if ($script:phase -notlike 'LICENSE_*' -and $known -contains $_.Exception.Message) { $script:diagnosticCode=$_.Exception.Message }
-    # P0-2: 上报失败到服务端（仅固定阶段码与诊断码，不含异常原文；上报失败不影响退出流程）
+    # P0-2: 上报固定码及已脱敏的 APPX detail；上报失败不影响退出流程
     try { Invoke-InstallFailReport } catch { }
     Write-SafeDiagnostic 'FAILED' ($_.Exception.GetType().FullName) '1'
     Set-DiagnosticStage $script:phase $script:diagnosticCode

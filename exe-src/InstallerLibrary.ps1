@@ -46,7 +46,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$ScriptVersion = '4.6.0.0'
+$ScriptVersion = '4.6.1.0'
+# Microsoft-owned aka.ms links, downloaded and manifest-verified on 2026-10-19.
+$THZ_VCLIBS_URL_X64 = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx'
+$THZ_VCLIBS_URL_ARM64 = 'https://aka.ms/Microsoft.VCLibs.arm64.14.00.Desktop.appx'
 
 function Test-NonInteractive {
     <#
@@ -1721,6 +1724,127 @@ function Format-Duration {
     return ('{0} 秒' -f $seconds)
 }
 
+function Get-MsixManifest($msixPath) {
+    $archive = $null
+    $reader = $null
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        $archive = [IO.Compression.ZipFile]::OpenRead($msixPath)
+        $entry = $archive.GetEntry('AppxManifest.xml')
+        if ($null -eq $entry) { return $null }
+        $settings = New-Object Xml.XmlReaderSettings
+        $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+        $settings.XmlResolver = $null
+        $reader = [Xml.XmlReader]::Create($entry.Open(), $settings)
+        $manifest = New-Object Xml.XmlDocument
+        $manifest.XmlResolver = $null
+        $manifest.Load($reader)
+        return ,$manifest
+    } catch { return $null } finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+        if ($null -ne $archive) { $archive.Dispose() }
+    }
+}
+
+function Get-MsixPackageIdentity($msixPath) {
+    try {
+        $manifest = Get-MsixManifest $msixPath
+        if ($null -eq $manifest) { return $null }
+        $identity = $manifest.SelectSingleNode('/*[local-name()="Package"]/*[local-name()="Identity"]')
+        if ($null -eq $identity -or -not $identity.GetAttribute('Name')) { return $null }
+        return [pscustomobject]@{
+            Name = $identity.GetAttribute('Name')
+            Version = [Version]$identity.GetAttribute('Version')
+            ProcessorArchitecture = $identity.GetAttribute('ProcessorArchitecture')
+        }
+    } catch { return $null }
+}
+
+function Write-MsixDependencyDiagnostic([string]$Name, [string]$State) {
+    $safeName = $Name -replace '[^A-Za-z0-9_.-]', '_'
+    $detail = "check=dependency name=$safeName status=$State"
+    Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields $detail
+    # Retain missing dependencies for the fail report even when the main install fails later.
+    $script:AppxFailDetail = ConvertTo-SafeDiagDetail (([string]$script:AppxFailDetail) + ' | ' + $detail)
+}
+
+function Install-MsixDependencies($msixPath) {
+    # Official source: https://learn.microsoft.com/en-us/troubleshoot/developer/visualstudio/cpp/libraries/c-runtime-packages-desktop-bridge
+    # aka.ms constants above were verified as HTTP 200 redirects to download.microsoft.com,
+    # with x64/arm64 Microsoft.VCLibs.140.00.UWPDesktop manifests (2026-10-19).
+    # These Desktop packages do NOT satisfy Microsoft.VCLibs.140.00: require exact identity.
+    $manifest = Get-MsixManifest $msixPath
+    if ($null -eq $manifest) { return }
+    $identity = Get-MsixPackageIdentity $msixPath
+    foreach ($dependency in $manifest.SelectNodes('/*[local-name()="Package"]/*[local-name()="Dependencies"]/*[local-name()="PackageDependency"]')) {
+        $name = $dependency.GetAttribute('Name')
+        $dependencyPath = $null
+        try {
+            $minVersion = if ($dependency.GetAttribute('MinVersion')) { [Version]$dependency.GetAttribute('MinVersion') } else { [Version]'0.0.0.0' }
+            $arch = $dependency.GetAttribute('ProcessorArchitecture')
+            if (-not $arch -and $null -ne $identity) { $arch = $identity.ProcessorArchitecture }
+            if (-not $arch -or $arch -eq 'neutral') {
+                $arch = switch ($env:PROCESSOR_ARCHITECTURE) { 'AMD64' { 'x64' } 'ARM64' { 'arm64' } default { '' } }
+            }
+            $installed = @(Get-AppxPackage -Name $name -ErrorAction SilentlyContinue | Where-Object {
+                [Version]$_.Version -ge $minVersion -and ([string]$_.Architecture -ieq $arch -or [string]$_.Architecture -ieq 'neutral')
+            })
+            if ($installed.Count -gt 0) { continue }
+            Write-MsixDependencyDiagnostic $name 'missing'
+            if ($name -notin @('Microsoft.VCLibs.140.00', 'Microsoft.VCLibs.140.00.UWPDesktop')) {
+                Write-MsixDependencyDiagnostic $name 'unknown_no_download'
+                continue
+            }
+            if ($name -eq 'Microsoft.VCLibs.140.00') {
+                Write-MsixDependencyDiagnostic $name 'no_verified_matching_url'
+                continue
+            }
+            $url = switch ($arch) { 'x64' { $THZ_VCLIBS_URL_X64 } 'arm64' { $THZ_VCLIBS_URL_ARM64 } default { '' } }
+            if (-not $url) { Write-MsixDependencyDiagnostic $name 'unsupported_arch'; continue }
+            $dependencyPath = Join-Path $env:TEMP ('THZ-VCLibs-' + [Guid]::NewGuid().ToString('N') + '.appx')
+            Invoke-ForeignWebRequest -Uri $url -TimeoutSec 120 -OutFile $dependencyPath | Out-Null
+            $downloadIdentity = Get-MsixPackageIdentity $dependencyPath
+            if ($null -eq $downloadIdentity -or $downloadIdentity.Name -cne $name -or $downloadIdentity.ProcessorArchitecture -ine $arch -or $downloadIdentity.Version -lt $minVersion) {
+                Write-MsixDependencyDiagnostic $name 'download_identity_or_version_mismatch'
+                continue
+            }
+            Add-AppxPackage -Path $dependencyPath -ErrorAction Stop | Out-Null
+            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=dependency name=$name status=installed"
+        } catch {
+            Write-MsixDependencyDiagnostic $name 'heal_failed'
+        } finally {
+            if ($dependencyPath -and (Test-Path -LiteralPath $dependencyPath)) {
+                Remove-Item -LiteralPath $dependencyPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
+function Get-AppxFailureAdvice($hresult) {
+    # 0x80073D10 means wrong processor architecture (Microsoft APPX troubleshooting),
+    # not a disabled service; leave it to the generic fallback.
+    $advice = switch (([string]$hresult).ToUpperInvariant()) {
+        { $_ -in @('0X80073CF3', '0X80073CF0', '0X80073CF9') } { '缺少运行组件或安装包损坏，建议先重装一次安装器；仍失败请联系客服。'; break }
+        '0X80070422' { '系统部署服务被禁用，请联系系统管理员检查 AppXSVC、ClipSVC 等部署服务后重试。'; break }
+        'DESKTOP_WINDOWS_TOO_OLD' { 'Windows 版本过旧，需要 Windows 10 1809（build 17763）及以上，请升级系统后重试。'; break }
+        { $_ -in @('0X800B0109', '0X800B010A') } { '系统时间不对或证书问题，请校准系统时间并安装 Windows 更新后重试。'; break }
+        'DESKTOP_APPX_DEPENDENCY_FAILED' { '缺少运行组件或安装包损坏，建议先重装一次安装器；仍失败请联系客服。'; break }
+        'DESKTOP_APPX_SERVICE_DISABLED' { '系统部署服务被禁用，请联系系统管理员检查 AppXSVC、ClipSVC 等部署服务后重试。'; break }
+        'DESKTOP_APPX_CERT_FAILED' { '系统时间不对或证书问题，请校准系统时间并安装 Windows 更新后重试。'; break }
+        default { '应用安装未完成，请重新下载安装器后重试，并保留安装日志以便排查。' }
+    }
+    return ($advice + ' 客服 QQ：89523844')
+}
+
+function Get-AppxFailureCode($hresult) {
+    # 按 HRESULT 分化桌面路线 APPX 安装失败的诊断码（与 Get-AppxFailureAdvice 的建议文案同义）。
+    $h = ([string]$hresult).ToUpperInvariant()
+    if ($h -in @('0X80073CF3', '0X80073CF0')) { return 'DESKTOP_APPX_DEPENDENCY_FAILED' }
+    if ($h -in @('0X800B0109', '0X800B010A')) { return 'DESKTOP_APPX_CERT_FAILED' }
+    if ($h -eq '0X80070422') { return 'DESKTOP_APPX_SERVICE_DISABLED' }
+    return 'DESKTOP_APPX_INSTALL_FAILED'
+}
+
 function Test-AppxInstallPrerequisites {
     # APPX/MSIX 侧加载环境预检：在安装前记录环境信息，帮助诊断真实机器上的
     # DESKTOP_APPX_INSTALL_FAILED（精简版系统 / 旧 Build / 部署服务被禁等）。
@@ -1730,19 +1854,33 @@ function Test-AppxInstallPrerequisites {
         $osCaption = ([string]$osInfo.Caption -replace '\s+', '_')
         Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=os_version caption=$osCaption build=$osBuild"
         if ($osBuild -lt 17763) {
+            Write-Host (Get-AppxFailureAdvice 'DESKTOP_WINDOWS_TOO_OLD')
             throw 'DESKTOP_WINDOWS_TOO_OLD'
         }
     } else {
         Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=os_version status=query_failed'
     }
 
-    $appxSvc = Get-Service -Name AppXSVC -ErrorAction SilentlyContinue
-    if ($null -eq $appxSvc) {
-        Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=appxsvc status=not_found warning=service_missing'
-    } else {
-        Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields ("check=appxsvc status={0} starttype={1}" -f $appxSvc.Status, $appxSvc.StartType)
-        if ($appxSvc.StartType -eq 'Disabled') {
-            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=appxsvc warning=service_disabled'
+    foreach ($serviceName in @('AppXSVC', 'ClipSVC')) {
+        try {
+            $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if ($null -eq $service) {
+                Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=service service=$serviceName status=not_found"
+                continue
+            }
+            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields ("check=service service={0} status={1} starttype={2}" -f $serviceName, $service.Status, $service.StartType)
+            if ($service.StartType -eq 'Disabled' -or $service.Status -eq 'Stopped') {
+                Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=service service=$serviceName status=heal_attempt"
+                try {
+                    Set-Service -Name $serviceName -StartupType Manual -ErrorAction Stop
+                    Start-Service -Name $serviceName -ErrorAction Stop
+                    Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=service service=$serviceName status=heal_ok"
+                } catch {
+                    Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=service service=$serviceName status=heal_failed"
+                }
+            }
+        } catch {
+            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields "check=service service=$serviceName status=heal_failed"
         }
     }
 
@@ -1848,7 +1986,24 @@ function Install-OfficialCodexDesktop {
         throw 'DESKTOP_MSIX_FORMAT_INVALID'
     }
 
+    $script:AppxFailDetail = ''
+    $script:AppxHResult = ''
     Test-AppxInstallPrerequisites
+    $identity = Get-MsixPackageIdentity $msixPath
+    if ($null -ne $identity) {
+        $existing = @(Get-AppxPackage -Name $identity.Name -ErrorAction SilentlyContinue | Where-Object { [Version]$_.Version -ge $identity.Version })
+        if ($existing.Count -gt 0) {
+            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=main_package status=already_installed'
+            return @{
+                MsixPath = $msixPath
+                Arch = $arch
+                SizeBytes = $size
+                DownloadSeconds = [int]$downloadElapsed.TotalSeconds
+                InstallSeconds = 0
+            }
+        }
+    }
+    Install-MsixDependencies $msixPath
 
     $installStart = Get-Date
     $installSpinner = Start-ProgressSpinner -Message '正在安装 ChatGPT Desktop...'
@@ -1857,11 +2012,27 @@ function Install-OfficialCodexDesktop {
             Add-AppxPackage -Path $msixPath -ErrorAction Stop
             $installSpinner.Succeeded = $true
         } catch {
-            $realErr = $_.Exception.Message
-            if ($_.Exception.InnerException) { $realErr += " | Inner: " + $_.Exception.InnerException.Message }
-            $realErr = $realErr -replace '\r?\n', ' '
-            Write-AppxDiagnosticEvent -Operation 'APPX_INSTALL_ERROR' -Detail $realErr
-            throw 'DESKTOP_APPX_INSTALL_FAILED'
+            $firstException = $_.Exception
+            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=main_package status=retry_force_application_shutdown'
+            try {
+                Add-AppxPackage -Path $msixPath -ForceApplicationShutdown -ErrorAction Stop
+                $installSpinner.Succeeded = $true
+            } catch {
+                $messages = @()
+                foreach ($exception in @($firstException, $_.Exception)) {
+                    while ($null -ne $exception) {
+                        $messages += $exception.Message
+                        $exception = $exception.InnerException
+                    }
+                }
+                $realErr = $messages -join ' | Inner: '
+                $match = [regex]::Match($realErr, '0x[0-9A-Fa-f]{8}')
+                $script:AppxHResult = if ($match.Success) { $match.Value } else { '' }
+                $script:AppxFailDetail = ConvertTo-SafeDiagDetail (([string]$script:AppxFailDetail) + ' | ' + $realErr)
+                Write-AppxDiagnosticEvent -Operation 'APPX_INSTALL_ERROR' -Detail $script:AppxFailDetail
+                Write-Host (Get-AppxFailureAdvice (Get-AppxFailureCode $script:AppxHResult))
+                throw (Get-AppxFailureCode $script:AppxHResult)
+            }
         }
     } finally {
         Stop-ProgressSpinner -Spinner $installSpinner
@@ -1950,7 +2121,24 @@ function Install-ClaudeDesktop {
         throw 'DESKTOP_MSIX_FORMAT_INVALID'
     }
 
+    $script:AppxFailDetail = ''
+    $script:AppxHResult = ''
     Test-AppxInstallPrerequisites
+    $identity = Get-MsixPackageIdentity $msixPath
+    if ($null -ne $identity) {
+        $existing = @(Get-AppxPackage -Name $identity.Name -ErrorAction SilentlyContinue | Where-Object { [Version]$_.Version -ge $identity.Version })
+        if ($existing.Count -gt 0) {
+            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=main_package status=already_installed'
+            return @{
+                MsixPath = $msixPath
+                Arch = $arch
+                SizeBytes = $size
+                DownloadSeconds = [int]$downloadElapsed.TotalSeconds
+                InstallSeconds = 0
+            }
+        }
+    }
+    Install-MsixDependencies $msixPath
 
     $installStart = Get-Date
     $installSpinner = Start-ProgressSpinner -Message '正在安装 Claude Desktop...'
@@ -1959,11 +2147,27 @@ function Install-ClaudeDesktop {
             Add-AppxPackage -Path $msixPath -ErrorAction Stop
             $installSpinner.Succeeded = $true
         } catch {
-            $realErr = $_.Exception.Message
-            if ($_.Exception.InnerException) { $realErr += " | Inner: " + $_.Exception.InnerException.Message }
-            $realErr = $realErr -replace '\r?\n', ' '
-            Write-AppxDiagnosticEvent -Operation 'APPX_INSTALL_ERROR' -Detail $realErr
-            throw 'DESKTOP_APPX_INSTALL_FAILED'
+            $firstException = $_.Exception
+            Write-AppxDiagnosticEvent -Operation 'APPX_PREFLIGHT' -Fields 'check=main_package status=retry_force_application_shutdown'
+            try {
+                Add-AppxPackage -Path $msixPath -ForceApplicationShutdown -ErrorAction Stop
+                $installSpinner.Succeeded = $true
+            } catch {
+                $messages = @()
+                foreach ($exception in @($firstException, $_.Exception)) {
+                    while ($null -ne $exception) {
+                        $messages += $exception.Message
+                        $exception = $exception.InnerException
+                    }
+                }
+                $realErr = $messages -join ' | Inner: '
+                $match = [regex]::Match($realErr, '0x[0-9A-Fa-f]{8}')
+                $script:AppxHResult = if ($match.Success) { $match.Value } else { '' }
+                $script:AppxFailDetail = ConvertTo-SafeDiagDetail (([string]$script:AppxFailDetail) + ' | ' + $realErr)
+                Write-AppxDiagnosticEvent -Operation 'APPX_INSTALL_ERROR' -Detail $script:AppxFailDetail
+                Write-Host (Get-AppxFailureAdvice (Get-AppxFailureCode $script:AppxHResult))
+                throw (Get-AppxFailureCode $script:AppxHResult)
+            }
         }
     } finally {
         Stop-ProgressSpinner -Spinner $installSpinner
