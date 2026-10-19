@@ -46,7 +46,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$ScriptVersion = '4.6.2.0'
+$ScriptVersion = '4.6.3.0'
 # Microsoft-owned aka.ms links, downloaded and manifest-verified on 2026-10-19.
 $THZ_VCLIBS_URL_X64 = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx'
 $THZ_VCLIBS_URL_ARM64 = 'https://aka.ms/Microsoft.VCLibs.arm64.14.00.Desktop.appx'
@@ -691,6 +691,155 @@ function Stop-EmbeddedProxy {
     Write-Host 'stage=DOWNLOAD operation=EMBEDDED_PROXY proxy_stopped=true'
 }
 
+function Invoke-ResumableDownload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [ValidateRange(1, 2147483647)][int]$TimeoutSec = 600
+    )
+
+    Add-Type -AssemblyName System.Net.Http
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    if (-not (Get-Variable -Name DownloadAttemptLog -Scope Script -ErrorAction SilentlyContinue)) {
+        $script:DownloadAttemptLog = @()
+    }
+    $directAvailable = Test-DirectConnection -Uri $Uri -TimeoutSec 10
+    Write-Host "stage=DOWNLOAD operation=RESUMABLE_DOWNLOAD direct_probed=$directAvailable"
+    $routeErrors = @{}
+    foreach ($route in @('direct', 'embedded_proxy', 'legacy_proxy', 'legacy_proxy_us')) {
+        for ($attempt = 1; $attempt -le 2; $attempt++) {
+            $handler = $client = $response = $inputStream = $outputStream = $request = $cancel = $null
+            $headRequest = $headResponse = $headCancel = $null
+            [long]$resumeFrom = 0
+            $result = 'ok'
+            $succeeded = $false
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            try {
+                $handler = New-Object System.Net.Http.HttpClientHandler
+                $handler.UseProxy = $false
+                if ($route -ne 'direct') {
+                    if ($route -eq 'embedded_proxy') {
+                        $proxyUrl = Start-EmbeddedProxy
+                    } elseif ($route -eq 'legacy_proxy_us') {
+                        $proxyUrl = 'http://us.thz.quest:18888'
+                    } else {
+                        $baseServerUri = New-Object System.Uri($BASE_URL)
+                        $proxyUrl = 'http://{0}:18888' -f $baseServerUri.Host
+                    }
+                    $handler.Proxy = New-Object System.Net.WebProxy($proxyUrl)
+                    $handler.UseProxy = $true
+                }
+                $client = New-Object System.Net.Http.HttpClient($handler)
+                $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+                $cancel = New-Object System.Threading.CancellationTokenSource
+                $remaining = [Math]::Max(1, $TimeoutSec * 1000.0 - $clock.Elapsed.TotalMilliseconds)
+                $cancel.CancelAfter([TimeSpan]::FromMilliseconds($remaining))
+                [long]$totalLength = 0
+                if ([IO.File]::Exists($OutFile) -and (Get-Item -LiteralPath $OutFile).Length -gt 0) {
+                    try {
+                        $headRequest = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Head, $Uri)
+                        $headCancel = [Threading.CancellationTokenSource]::CreateLinkedTokenSource($cancel.Token)
+                        $headCancel.CancelAfter(30000)
+                        $headResponse = $client.SendAsync($headRequest, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $headCancel.Token).GetAwaiter().GetResult()
+                        $null = $headResponse.EnsureSuccessStatusCode()
+                        if ($null -ne $headResponse.Content.Headers.ContentLength) {
+                            $totalLength = [long]$headResponse.Content.Headers.ContentLength
+                        }
+                        [long]$localLength = (Get-Item -LiteralPath $OutFile).Length
+                        if ($totalLength -gt $localLength) { $resumeFrom = $localLength }
+                    } catch {
+                        # HEAD unavailable: fall back to a full GET on this route.
+                        $totalLength = 0
+                    } finally {
+                        if ($headResponse) { $headResponse.Dispose() }
+                        if ($headRequest) { $headRequest.Dispose() }
+                        if ($headCancel) { $headCancel.Dispose() }
+                    }
+                }
+                $request = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Get, $Uri)
+                if ($resumeFrom -gt 0) {
+                    $null = $request.Headers.TryAddWithoutValidation('Range', ('bytes={0}-' -f $resumeFrom))
+                }
+                $response = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cancel.Token).GetAwaiter().GetResult()
+                $null = $response.EnsureSuccessStatusCode()
+                $append = $resumeFrom -gt 0 -and [int]$response.StatusCode -eq 206
+                if ($append) {
+                    $range = $response.Content.Headers.ContentRange
+                    if ($null -eq $range -or $range.From -ne $resumeFrom) { throw 'Invalid resume Content-Range' }
+                } elseif ([int]$response.StatusCode -ne 200) {
+                    throw 'Unexpected download HTTP status'
+                }
+                $mode = [IO.FileMode]::Create
+                if ($append) { $mode = [IO.FileMode]::Append } else { $resumeFrom = 0 }
+                $outputStream = [IO.File]::Open($OutFile, $mode, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+                $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+                $buffer = New-Object byte[] 81920
+                $lastDataAt = $clock.Elapsed.TotalMilliseconds
+                [long]$received = 0
+                while ($true) {
+                    $remaining = $TimeoutSec * 1000.0 - $clock.Elapsed.TotalMilliseconds
+                    $idleRemaining = 30000 - ($clock.Elapsed.TotalMilliseconds - $lastDataAt)
+                    if ($remaining -le 0 -or $idleRemaining -le 0) { throw (New-Object System.TimeoutException('Download timed out or stalled')) }
+                    $read = $inputStream.ReadAsync($buffer, 0, $buffer.Length, $cancel.Token)
+                    # Wait bounds even streams that ignore cancellation on .NET Framework.
+                    if (-not $read.Wait([int][Math]::Max(1, [Math]::Min($remaining, $idleRemaining)))) {
+                        $cancel.Cancel()
+                        throw (New-Object System.TimeoutException('Download timed out or stalled'))
+                    }
+                    $count = $read.GetAwaiter().GetResult()
+                    if ($count -eq 0) { break }
+                    $lastDataAt = $clock.Elapsed.TotalMilliseconds
+                    $outputStream.Write($buffer, 0, $count)
+                    $received += $count
+                }
+                if ($clock.Elapsed.TotalSeconds -ge $TimeoutSec) { throw (New-Object System.TimeoutException('Download timed out')) }
+                if ($null -ne $response.Content.Headers.ContentLength -and $received -ne $response.Content.Headers.ContentLength) {
+                    throw 'Incomplete download Content-Length'
+                }
+                if ($append -and $resumeFrom + $received -ne $totalLength) { throw 'Incomplete resumed download' }
+                $succeeded = $true
+            } catch {
+                $result = $_.Exception.GetType().Name
+                $routeErrors[$route] = $_.Exception.Message
+            } finally {
+                if ($cancel) { $cancel.Cancel() }
+                if ($inputStream) { $inputStream.Dispose() }
+                if ($outputStream) { $outputStream.Dispose() }
+                if ($response) { $response.Dispose() }
+                if ($request) { $request.Dispose() }
+                if ($client) { $client.Dispose() }
+                if ($handler) { $handler.Dispose() }
+                if ($cancel) { $cancel.Dispose() }
+                $clock.Stop()
+                [long]$size = 0
+                if ([IO.File]::Exists($OutFile)) { $size = (Get-Item -LiteralPath $OutFile).Length }
+                $script:DownloadAttemptLog += 'route={0} attempt={1} resume_from={2} size={3} result={4}' -f $route, $attempt, $resumeFrom, $size, $result
+            }
+            if ($succeeded) { return }
+        }
+    }
+    throw ('境外资源下载失败。直连错误：{0}；内置代理错误：{1}；备用代理错误：{2}；备用代理2错误：{3}' -f $routeErrors['direct'], $routeErrors['embedded_proxy'], $routeErrors['legacy_proxy'], $routeErrors['legacy_proxy_us'])
+}
+
+function Test-DesktopDiskSpace {
+    $checked = @{}
+    foreach ($path in @($env:TEMP, $env:SystemDrive)) {
+        $lowSpace = $false
+        try {
+            if ([string]::IsNullOrWhiteSpace($path)) { continue }
+            $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath(($path.TrimEnd('\') + '\')))
+            if ($checked.ContainsKey($root)) { continue }
+            $drive = New-Object System.IO.DriveInfo($root)
+            $lowSpace = $drive.AvailableFreeSpace -lt 4GB
+            $checked[$root] = $true
+        } catch {
+            # Unknown disk information must not block installation.
+        }
+        if ($lowSpace) { throw 'DESKTOP_DISK_SPACE_LOW' }
+    }
+}
+
 function Invoke-ForeignWebRequest {
     [CmdletBinding()]
     param(
@@ -781,14 +930,35 @@ function Invoke-ForeignWebRequest {
     catch {
         $legacyProxyError = $_.Exception.Message
 
-        Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=proxy_failed'
+        try {
+            $legacyProxyUsUrl = 'http://us.thz.quest:18888'
 
-        throw (
-            '境外资源下载失败。直连错误：{0}；内置代理错误：{1}；备用代理错误：{2}' -f
-            $directError,
-            $embeddedProxyError,
-            $legacyProxyError
-        )
+            Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=legacy_proxy_us'
+
+            $iwrParams = @{
+                Uri = $Uri
+                Method = $Method
+                Proxy = $legacyProxyUsUrl
+                UseBasicParsing = $true
+                TimeoutSec = $TimeoutSec
+                ErrorAction = 'Stop'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($OutFile)) { $iwrParams['OutFile'] = $OutFile }
+            return Invoke-WebRequest @iwrParams
+        }
+        catch {
+            $legacyProxyUsError = $_.Exception.Message
+
+            Write-Host 'stage=DOWNLOAD operation=FOREIGN_WEB_REQUEST download_via=proxy_failed'
+
+            throw (
+                '境外资源下载失败。直连错误：{0}；内置代理错误：{1}；备用代理错误：{2}；备用代理2错误：{3}' -f
+                $directError,
+                $embeddedProxyError,
+                $legacyProxyError,
+                $legacyProxyUsError
+            )
+        }
     }
 }
 $StandaloneBinDir     = Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin'
@@ -1843,6 +2013,7 @@ function Get-AppxFailureAdvice($hresult) {
         'DESKTOP_APPX_DEPENDENCY_FAILED' { '缺少运行组件或安装包损坏，建议先重装一次安装器；仍失败请联系客服。'; break }
         'DESKTOP_APPX_SERVICE_DISABLED' { '系统部署服务被禁用，请联系系统管理员检查 AppXSVC、ClipSVC 等部署服务后重试。'; break }
         { $_ -in @('DESKTOP_APPX_ADMIN_REQUIRED', '0X80073D28') } { '安装需要管理员权限，请关闭安装器，右键安装包选择「以管理员身份运行」后重试。'; break }
+        'DESKTOP_DISK_SPACE_LOW' { return "应用安装未完成。`n电脑磁盘空间不足，请先清理 C 盘、腾出至少 5GB 空间后重试（可删除不用的大文件或运行系统「磁盘清理」）。`n如需帮助，请联系客服 QQ：89523844" }
         'DESKTOP_APPX_CERT_FAILED' { '系统时间不对或证书问题，请校准系统时间并安装 Windows 更新后重试。'; break }
         default { '应用安装未完成，请重新下载安装器后重试，并保留安装日志以便排查。' }
     }
@@ -1856,6 +2027,7 @@ function Get-AppxFailureCode($hresult) {
     if ($h -in @('0X800B0109', '0X800B010A')) { return 'DESKTOP_APPX_CERT_FAILED' }
     if ($h -eq '0X80070422') { return 'DESKTOP_APPX_SERVICE_DISABLED' }
     if ($h -eq '0X80073D28') { return 'DESKTOP_APPX_ADMIN_REQUIRED' }
+    if ($h -in @('0X80070070', '0X80073CF4')) { return 'DESKTOP_DISK_SPACE_LOW' }
     return 'DESKTOP_APPX_INSTALL_FAILED'
 }
 
@@ -1919,54 +2091,17 @@ function Install-OfficialCodexDesktop {
     }
     $msixPath = Join-Path $downloadDir "ChatGPT-$arch.msix"
 
+    Test-DesktopDiskSpace
+    $script:DownloadAttemptLog = @()
+
     $downloadStart = Get-Date
     $downloadSpinner = Start-ProgressSpinner -Message '正在下载 ChatGPT Desktop 安装包...'
     try {
-        # 大文件经代理下载可能被截断/返回错误页（不抛异常但文件缺失或过小）：
-        # 最多试 3 次，每次删掉残留的半截文件，尝试后校验大小
-        $downloadSucceeded = $false
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-            if (Test-Path -LiteralPath $msixPath) {
-                Remove-Item -LiteralPath $msixPath -Force
-            }
-
-            try {
-                Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $msixPath | Out-Null
-
-                if (-not (Test-Path -LiteralPath $msixPath)) {
-                    Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 reason=missing size=0"
-                } else {
-                    [long]$downloadSize = (Get-Item -LiteralPath $msixPath).Length
-                    [long]$expectedSize = 0
-                    try {
-                        $headResponse = Invoke-ForeignWebRequest -Uri $url -Method HEAD -TimeoutSec 30
-                        [long]::TryParse([string]$headResponse.Headers['Content-Length'], [ref]$expectedSize) | Out-Null
-                    } catch {
-                        $expectedSize = 0
-                    }
-
-                    if ($expectedSize -gt 0 -and $downloadSize -ne $expectedSize) {
-                        Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 reason=size_mismatch size=$downloadSize expected_size=$expectedSize"
-                        Remove-Item -LiteralPath $msixPath -Force
-                    } elseif ($downloadSize -gt 10MB) {
-                        $downloadSucceeded = $true
-                        $downloadSpinner.Succeeded = $true
-                        break
-                    }
-
-                    Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 reason=too_small size=$downloadSize"
-                    Remove-Item -LiteralPath $msixPath -Force
-                }
-            } catch {
-                Write-Host "stage=INSTALL operation=CHATGPT_DOWNLOAD_ATTEMPT attempt=$attempt/3 error=$($_.Exception.Message)"
-            }
-
-            if ($attempt -lt 3) {
-                Start-Sleep -Seconds (5 * $attempt)
-            }
-        }
-
-        if (-not $downloadSucceeded) {
+        try {
+            Invoke-ResumableDownload -Uri $url -TimeoutSec 600 -OutFile $msixPath
+            $downloadSpinner.Succeeded = $true
+        } catch {
+            $script:AppxFailDetail = $script:DownloadAttemptLog -join ' | '
             throw 'DESKTOP_DOWNLOAD_FAILED'
         }
     } finally {
@@ -2083,34 +2218,19 @@ function Install-ClaudeDesktop {
     }
     $msixPath = Join-Path $downloadDir "Claude-$arch.msix"
 
+    Test-DesktopDiskSpace
+    $script:DownloadAttemptLog = @()
+
     $downloadStart = Get-Date
     $downloadSpinner = Start-ProgressSpinner -Message '正在下载 Claude Desktop 安装包...'
     try {
-        # 大文件直连下载可能被中途重置：最多试 3 次，每次删掉残留的半截文件
-        $downloadSucceeded = $false
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
-            if (Test-Path -LiteralPath $msixPath) {
-                Remove-Item -LiteralPath $msixPath -Force
-            }
-
-            try {
-                # Stream directly to disk: 290MB+ package must not be buffered in memory
-                Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $msixPath | Out-Null
-                $downloadSucceeded = $true
-                break
-            } catch {
-                Write-Host "stage=INSTALL operation=CLAUDE_DOWNLOAD_ATTEMPT attempt=$attempt/3 error=$($_.Exception.Message)"
-                if ($attempt -lt 3) {
-                    Start-Sleep -Seconds (5 * $attempt)
-                }
-            }
-        }
-
-        if (-not $downloadSucceeded) {
+        try {
+            Invoke-ResumableDownload -Uri $url -TimeoutSec 600 -OutFile $msixPath
+            $downloadSpinner.Succeeded = $true
+        } catch {
+            $script:AppxFailDetail = $script:DownloadAttemptLog -join ' | '
             throw 'DESKTOP_DOWNLOAD_FAILED'
         }
-
-        $downloadSpinner.Succeeded = $true
     } finally {
         Stop-ProgressSpinner -Spinner $downloadSpinner
     }
@@ -2225,14 +2345,18 @@ function Install-GeminiDesktop {
     }
     $exePath = Join-Path $downloadDir 'GeminiSetup.exe'
 
+    Test-DesktopDiskSpace
+    $script:DownloadAttemptLog = @()
+
     $downloadStart = Get-Date
     $downloadSpinner = Start-ProgressSpinner -Message '正在下载 Gemini Desktop 安装包...'
     try {
         try {
             # Stream directly to disk: large package must not be buffered in memory
-            Invoke-ForeignWebRequest -Uri $url -TimeoutSec 600 -OutFile $exePath | Out-Null
+            Invoke-ResumableDownload -Uri $url -TimeoutSec 600 -OutFile $exePath | Out-Null
             $downloadSpinner.Succeeded = $true
         } catch {
+            $script:AppxFailDetail = $script:DownloadAttemptLog -join ' | '
             throw 'DESKTOP_DOWNLOAD_FAILED'
         }
     } finally {
