@@ -1,8 +1,8 @@
 ﻿#requires -Version 5.1
 $ErrorActionPreference = 'Stop'
 $script:phase='PREFLIGHT'; $script:diagnosticCode='POWERSHELL_INITIALIZATION_FAILED'
-# 与 C# 启动器 AssemblyVersion 保持一致（P0 移植：版本号统一 4.6.1.0）。
-$script:InstallerVersion='4.6.1.0'
+# 与 C# 启动器 AssemblyVersion 保持一致（P0 移植：版本号统一 4.6.2.0）。
+$script:InstallerVersion='4.6.2.0'
 # 真实 BuildNumber：[Environment]::OSVersion.Version 在无 Win10+ manifest 时被兼容垫片固定为 6.2.9200，日志改用 CIM 取真实值
 function Get-RealOsBuild {
     try {
@@ -13,7 +13,7 @@ function Get-RealOsBuild {
 }
 function Write-SafeDiagnostic([string]$Result,[string]$ExceptionType='NONE',[string]$ExitCode='NONE') {
     try {
-        $line = [DateTime]::UtcNow.ToString('o')+' installer=4.6.1.0 windows='+(Get-RealOsBuild)+' stage='+$script:phase+' code='+$(if($Result -eq 'PENDING'){'NONE'}else{$script:diagnosticCode})+' exit='+$ExitCode+' exception='+$ExceptionType+' workspace='+$PSScriptRoot+' verification='+$Result
+        $line = [DateTime]::UtcNow.ToString('o')+' installer=4.6.2.0 windows='+(Get-RealOsBuild)+' stage='+$script:phase+' code='+$(if($Result -eq 'PENDING'){'NONE'}else{$script:diagnosticCode})+' exit='+$ExitCode+' exception='+$ExceptionType+' workspace='+$PSScriptRoot+' verification='+$Result
         [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
     } catch {}
 }
@@ -427,8 +427,9 @@ function Invoke-InstallFailReport {
         $detail = ConvertTo-SafeDiagDetail ([string]$script:AppxFailDetail)
         if (-not [string]::IsNullOrWhiteSpace($detail)) { $payload.detail = $detail }
         $body = $payload | ConvertTo-Json
+        $bodyBytes = [Text.Encoding]::UTF8.GetBytes($body)
         $null = Invoke-RestMethod -Uri "$base/api/installer/fail" `
-            -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 15
+            -Method Post -ContentType 'application/json; charset=utf-8' -Body $bodyBytes -TimeoutSec 15
     } catch {
         # 上报失败绝不影响安装主流程
     }
@@ -564,7 +565,7 @@ Add-Type -AssemblyName System.Drawing
     exit 0
 } catch {
     # Only fixed codes and exception type; never exception messages, bodies or invocation data.
-    $known=@('CONFIG_HOME_INVALID','INSTALLATION_TICKET_INVALID','INSTALL_PLAN_MISMATCH','EXISTING_CODEX_CONFLICT','PROVIDER_INVALID','CONFIG_LOCATION_INVALID','CONFIG_INVALID','MODEL_INVALID','PROVIDER_URL_INVALID','CATALOG_PATH_INVALID','MODEL_CATALOG_INVALID','KEY_INPUT_CANCELLED','KEY_VALIDATION_FAILED','KEY_ATTEMPTS_EXHAUSTED','VERIFY_EXECUTABLE_MISSING','VERIFY_START_FAILED','VERIFY_TIMEOUT','VERIFY_EXIT_CODE','VERIFY_INVALID_VERSION','OFFICIAL_INSTALL_START_FAILED','OFFICIAL_INSTALL_TIMEOUT','OFFICIAL_INSTALL_FAILED','OFFICIAL_INSTALL_OUTPUT_MISSING','DESKTOP_WINDOWS_TOO_OLD','DESKTOP_ARCH_UNSUPPORTED','DESKTOP_SOURCE_INVALID','DESKTOP_DOWNLOAD_FAILED','DESKTOP_PACKAGE_TOO_SMALL','DESKTOP_MSIX_FORMAT_INVALID','DESKTOP_PACKAGE_IDENTITY_INVALID','DESKTOP_SIGNATURE_INVALID','DESKTOP_PUBLISHER_INVALID','DESKTOP_APPX_UNAVAILABLE','DESKTOP_APPX_INSTALL_FAILED','DESKTOP_APPX_DEPENDENCY_FAILED','DESKTOP_APPX_CERT_FAILED','DESKTOP_APPX_SERVICE_DISABLED','DESKTOP_ARCH_MISMATCH','DESKTOP_PACKAGE_VERIFY_FAILED','DESKTOP_APP_REGISTRATION_MISSING','DESKTOP_VERIFY_FAILED')
+    $known=@('CONFIG_HOME_INVALID','INSTALLATION_TICKET_INVALID','INSTALL_PLAN_MISMATCH','EXISTING_CODEX_CONFLICT','PROVIDER_INVALID','CONFIG_LOCATION_INVALID','CONFIG_INVALID','MODEL_INVALID','PROVIDER_URL_INVALID','CATALOG_PATH_INVALID','MODEL_CATALOG_INVALID','KEY_INPUT_CANCELLED','KEY_VALIDATION_FAILED','KEY_ATTEMPTS_EXHAUSTED','VERIFY_EXECUTABLE_MISSING','VERIFY_START_FAILED','VERIFY_TIMEOUT','VERIFY_EXIT_CODE','VERIFY_INVALID_VERSION','OFFICIAL_INSTALL_START_FAILED','OFFICIAL_INSTALL_TIMEOUT','OFFICIAL_INSTALL_FAILED','OFFICIAL_INSTALL_OUTPUT_MISSING','DESKTOP_WINDOWS_TOO_OLD','DESKTOP_ARCH_UNSUPPORTED','DESKTOP_SOURCE_INVALID','DESKTOP_DOWNLOAD_FAILED','DESKTOP_PACKAGE_TOO_SMALL','DESKTOP_MSIX_FORMAT_INVALID','DESKTOP_PACKAGE_IDENTITY_INVALID','DESKTOP_SIGNATURE_INVALID','DESKTOP_PUBLISHER_INVALID','DESKTOP_APPX_UNAVAILABLE','DESKTOP_APPX_INSTALL_FAILED','DESKTOP_APPX_DEPENDENCY_FAILED','DESKTOP_APPX_CERT_FAILED','DESKTOP_APPX_SERVICE_DISABLED','DESKTOP_APPX_ADMIN_REQUIRED','DESKTOP_ARCH_MISMATCH','DESKTOP_PACKAGE_VERIFY_FAILED','DESKTOP_APP_REGISTRATION_MISSING','DESKTOP_VERIFY_FAILED')
     if ($script:phase -notlike 'LICENSE_*' -and $known -contains $_.Exception.Message) { $script:diagnosticCode=$_.Exception.Message }
     # P0-2: 上报固定码及已脱敏的 APPX detail；上报失败不影响退出流程
     try { Invoke-InstallFailReport } catch { }

@@ -1,5 +1,7 @@
 ﻿using System;
 using System.IO;
+using System.ComponentModel;
+using System.Linq;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
@@ -10,7 +12,7 @@ using System.Xml;
 using System.Security.AccessControl;
 using System.Security.Principal;
 [assembly: AssemblyTitle("特好装 Codex 测试安装程序")]
-[assembly: AssemblyVersion("4.6.1.0")]
+[assembly: AssemblyVersion("4.6.2.0")]
 public static partial class Bootstrap {
  static string stage="UNEXPECTED", errorCode="UNEXPECTED_FAILED", logPath;
  static readonly bool CiTest = string.Equals(Environment.GetEnvironmentVariable("THZ_CI_TEST"), "1", StringComparison.Ordinal);
@@ -30,16 +32,39 @@ public static partial class Bootstrap {
   if(CiTest)Console.WriteLine("THZ_CI_DIAGLOG="+logPath);
   Log("START",null);
  }
+ static bool EnsureElevatedForDesktop(){
+  string exeName=Path.GetFileNameWithoutExtension(Assembly.GetExecutingAssembly().Location).ToLowerInvariant();
+  if(!exeName.Contains("chatgpt")&&!exeName.Contains("claude")&&!exeName.Contains("gemini"))return true;
+  if(CiTest){Stage("ELEVATE","ELEVATE_SKIPPED_CI");Log("ELEVATE",null);return true;}
+  if(Environment.GetEnvironmentVariable("THZ_ELEVATED_RELAUNCH")=="1"){Stage("ELEVATE","ELEVATE_ALREADY_ELEVATED");Log("ELEVATE",null);return true;}
+  if(new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)){Stage("ELEVATE","ELEVATE_ALREADY_ADMIN");Log("ELEVATE",null);return true;}
+  var psi=new ProcessStartInfo(Assembly.GetExecutingAssembly().Location);
+  psi.UseShellExecute=true;psi.Verb="runas";
+  var args=Environment.GetCommandLineArgs();
+  psi.Arguments=string.Join(" ",args.Skip(1).Select(a=>"\""+a.Replace("\"","\\\"")+"\""));
+  // ShellExecute 不支持 ProcessStartInfo.EnvironmentVariables；通过进程环境传递重启标记。
+  string previousRelaunch=Environment.GetEnvironmentVariable("THZ_ELEVATED_RELAUNCH");
+  try{
+   Environment.SetEnvironmentVariable("THZ_ELEVATED_RELAUNCH","1");
+   Stage("ELEVATE","ELEVATE_RELAUNCHING");Log("ELEVATE",null);
+   using(var p=Process.Start(psi)){if(p!=null){p.WaitForExit();Environment.Exit(p.ExitCode);}}
+   return true;
+  }catch(Win32Exception wex) when (wex.NativeErrorCode==1223){
+   Stage("ELEVATE","ELEVATE_DECLINED");Log("ELEVATE",null);
+   MessageBox.Show("安装桌面版需要管理员权限。\n请重新运行安装器，并在系统弹窗时点「是」；或右键安装包选择「以管理员身份运行」。\n如需帮助请联系客服 QQ：89523844","特好装",MessageBoxButtons.OK,MessageBoxIcon.Information);
+   Environment.Exit(0);return false;
+  }finally{Environment.SetEnvironmentVariable("THZ_ELEVATED_RELAUNCH",previousRelaunch);}
+ }
  static void Log(string result,Exception error){
   if(result=="PASS")errorCode="NONE";
-  try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.1.0 windows="+RealOsBuild+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
+  try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.2.0 windows="+RealOsBuild+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
  }
  static void LogDetail(string code,string candidate,Exception error){
   try{
    string msg=error==null?"NONE":(error.GetType().FullName+": "+(error.Message??"")).Replace("\r"," ").Replace("\n"," ");
    if(msg.Length>600)msg=msg.Substring(0,600);
    string cand=(candidate??"NONE").Replace("\r"," ").Replace("\n"," ");
-   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.1.0 windows="+RealOsBuild+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
+   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.2.0 windows="+RealOsBuild+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
   }catch{}
  }
  static void Stage(string value,string code){stage=value;errorCode=code;Log("PENDING",null);}
@@ -50,6 +75,7 @@ public static partial class Bootstrap {
   if(errorCode=="DESKTOP_APPX_DEPENDENCY_FAILED")return "应用安装未完成。\n缺少运行组件或安装包损坏，建议先重装一次安装器。\n仍失败请联系客服 QQ：89523844";
   if(errorCode=="DESKTOP_APPX_CERT_FAILED")return "应用安装未完成。\n系统时间不对或证书问题，请校准系统时间并安装 Windows 更新后重试。\n如反复出现，请联系客服 QQ：89523844";
   if(errorCode=="DESKTOP_APPX_SERVICE_DISABLED")return "应用安装未完成。\n系统部署服务被禁用，请联系系统管理员检查 AppXSVC、ClipSVC 等部署服务后重试。\n如需帮助，请联系客服 QQ：89523844";
+  if(errorCode=="DESKTOP_APPX_ADMIN_REQUIRED")return "应用安装未完成。\n这个安装需要管理员权限：请关闭安装器，右键安装包选择「以管理员身份运行」后重试。\n如需帮助，请联系客服 QQ：89523844";
   return "安装未完成。\n错误阶段："+stage+"\n错误代码："+errorCode+"\nSAFE_MESSAGE：当前阶段未完成，请截图此窗口联系客服。\nQQ：89523844\n"+(logPath!=null&&File.Exists(logPath)?"诊断日志已保留。\n诊断日志："+logPath:"诊断日志无法写入，请保留此窗口截图。");
  }
  static void ChildFailure(){
@@ -356,7 +382,7 @@ public static partial class Bootstrap {
  [STAThread] public static void Main(){
   if(Environment.OSVersion.Platform!=PlatformID.Win32NT)return;
   Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
-  try{InitLog();Stage("LICENSE","INSTALLATION_TICKET_INVALID");installationTicket=LoadInstallationTicket();Extract();bool installed=RunInstaller();installationTicket=null;bool verified=false;
+  try{InitLog();if(!EnsureElevatedForDesktop())return;Stage("LICENSE","INSTALLATION_TICKET_INVALID");installationTicket=LoadInstallationTicket();Extract();bool installed=RunInstaller();installationTicket=null;bool verified=false;
    while(!verified){try{if(!installed)throw new InvalidOperationException("INSTALL_FAILED");Stage(clientType=="desktop"?"DESKTOP_VERIFY":"CODEX_VERIFY","INSTALLATION_VERIFY_FAILED");Verify(true);Log("PASS",null);if(CiTest&&clientType=="desktop"&&providerType!="gemini")CiVerifyDesktopAppx();verified=true;}catch(Exception error){
     if(CiTest){Log("FAILED",error);try{Console.Error.WriteLine("THZ_CI_RESULT=FAIL stage="+stage+" code="+errorCode);}catch{}Environment.Exit(2);}else{var choice=Choice("安装未完成",Failure(error),new[]{"重试检测","重试安装","查看解决办法","联系客服","退出"});
     if(choice=="重试检测"){installed=true;continue;}if(choice=="重试安装"){Extract();installed=RunInstaller();continue;}if(choice=="联系客服"){Contact();continue;}if(choice=="查看解决办法"){Notice("请确认官方安装资源网络可用、测试授权有效，且不存在旧版安装冲突。\n不要关闭系统安全功能。\n诊断目录："+workspace);continue;}return;}

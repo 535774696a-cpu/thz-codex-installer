@@ -46,7 +46,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$ScriptVersion = '4.6.1.0'
+$ScriptVersion = '4.6.2.0'
 # Microsoft-owned aka.ms links, downloaded and manifest-verified on 2026-10-19.
 $THZ_VCLIBS_URL_X64 = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx'
 $THZ_VCLIBS_URL_ARM64 = 'https://aka.ms/Microsoft.VCLibs.arm64.14.00.Desktop.appx'
@@ -1746,6 +1746,18 @@ function Get-MsixManifest($msixPath) {
     }
 }
 
+function Get-MsixTargetBuild($msixPath) {
+    try {
+        $manifest = Get-MsixManifest $msixPath
+        if ($null -eq $manifest) { return 0 }
+        $target = $manifest.SelectSingleNode('/*[local-name()="Package"]/*[local-name()="Dependencies"]/*[local-name()="TargetDeviceFamily"]')
+        if ($null -eq $target) { return 0 }
+        $minVersion = [Version]$target.GetAttribute('MinVersion')
+        if ($minVersion.Build -gt 0) { return $minVersion.Build }
+    } catch { return 0 }
+    return 0
+}
+
 function Get-MsixPackageIdentity($msixPath) {
     try {
         $manifest = Get-MsixManifest $msixPath
@@ -1830,6 +1842,7 @@ function Get-AppxFailureAdvice($hresult) {
         { $_ -in @('0X800B0109', '0X800B010A') } { '系统时间不对或证书问题，请校准系统时间并安装 Windows 更新后重试。'; break }
         'DESKTOP_APPX_DEPENDENCY_FAILED' { '缺少运行组件或安装包损坏，建议先重装一次安装器；仍失败请联系客服。'; break }
         'DESKTOP_APPX_SERVICE_DISABLED' { '系统部署服务被禁用，请联系系统管理员检查 AppXSVC、ClipSVC 等部署服务后重试。'; break }
+        { $_ -in @('DESKTOP_APPX_ADMIN_REQUIRED', '0X80073D28') } { '安装需要管理员权限，请关闭安装器，右键安装包选择「以管理员身份运行」后重试。'; break }
         'DESKTOP_APPX_CERT_FAILED' { '系统时间不对或证书问题，请校准系统时间并安装 Windows 更新后重试。'; break }
         default { '应用安装未完成，请重新下载安装器后重试，并保留安装日志以便排查。' }
     }
@@ -1842,6 +1855,7 @@ function Get-AppxFailureCode($hresult) {
     if ($h -in @('0X80073CF3', '0X80073CF0')) { return 'DESKTOP_APPX_DEPENDENCY_FAILED' }
     if ($h -in @('0X800B0109', '0X800B010A')) { return 'DESKTOP_APPX_CERT_FAILED' }
     if ($h -eq '0X80070422') { return 'DESKTOP_APPX_SERVICE_DISABLED' }
+    if ($h -eq '0X80073D28') { return 'DESKTOP_APPX_ADMIN_REQUIRED' }
     return 'DESKTOP_APPX_INSTALL_FAILED'
 }
 
@@ -1986,6 +2000,13 @@ function Install-OfficialCodexDesktop {
         throw 'DESKTOP_MSIX_FORMAT_INVALID'
     }
 
+    $msixMinBuild = Get-MsixTargetBuild $msixPath
+    if ($msixMinBuild -gt 0) {
+        $osBuild = 0
+        try { $osBuild = [int](Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).BuildNumber } catch { $osBuild = 0 }
+        if ($osBuild -gt 0 -and $osBuild -lt $msixMinBuild) { throw 'DESKTOP_WINDOWS_TOO_OLD' }
+    }
+
     $script:AppxFailDetail = ''
     $script:AppxHResult = ''
     Test-AppxInstallPrerequisites
@@ -2119,6 +2140,13 @@ function Install-ClaudeDesktop {
     }
     if ($head[0] -ne 0x50 -or $head[1] -ne 0x4B) {
         throw 'DESKTOP_MSIX_FORMAT_INVALID'
+    }
+
+    $msixMinBuild = Get-MsixTargetBuild $msixPath
+    if ($msixMinBuild -gt 0) {
+        $osBuild = 0
+        try { $osBuild = [int](Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).BuildNumber } catch { $osBuild = 0 }
+        if ($osBuild -gt 0 -and $osBuild -lt $msixMinBuild) { throw 'DESKTOP_WINDOWS_TOO_OLD' }
     }
 
     $script:AppxFailDetail = ''
