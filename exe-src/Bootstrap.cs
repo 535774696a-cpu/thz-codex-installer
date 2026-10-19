@@ -49,7 +49,8 @@ public static partial class Bootstrap {
    Stage("ELEVATE","ELEVATE_RELAUNCHING");Log("ELEVATE",null);
    using(var p=Process.Start(psi)){if(p!=null){p.WaitForExit();Environment.Exit(p.ExitCode);}}
    return true;
-  }catch(Win32Exception wex) when (wex.NativeErrorCode==1223){
+  }catch(Win32Exception wex){
+   if(wex.NativeErrorCode!=1223)throw;
    Stage("ELEVATE","ELEVATE_DECLINED");Log("ELEVATE",null);
    MessageBox.Show("安装桌面版需要管理员权限。\n请重新运行安装器，并在系统弹窗时点「是」；或右键安装包选择「以管理员身份运行」。\n如需帮助请联系客服 QQ：89523844","特好装",MessageBoxButtons.OK,MessageBoxIcon.Information);
    Environment.Exit(0);return false;
