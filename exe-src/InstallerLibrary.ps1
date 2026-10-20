@@ -46,7 +46,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$ScriptVersion = '4.6.3.0'
+$ScriptVersion = '4.6.4.0'
 # Microsoft-owned aka.ms links, downloaded and manifest-verified on 2026-10-19.
 $THZ_VCLIBS_URL_X64 = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx'
 $THZ_VCLIBS_URL_ARM64 = 'https://aka.ms/Microsoft.VCLibs.arm64.14.00.Desktop.appx'
@@ -696,7 +696,10 @@ function Invoke-ResumableDownload {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
         [Parameter(Mandatory = $true)][string]$OutFile,
-        [ValidateRange(1, 2147483647)][int]$TimeoutSec = 600
+        [ValidateRange(1, 2147483647)][int]$TimeoutSec = 600,
+        [ValidateNotNullOrEmpty()]
+        [ValidateSet('direct', 'embedded_proxy', 'legacy_proxy', 'legacy_proxy_us')]
+        [string[]]$Routes = @('direct', 'embedded_proxy', 'legacy_proxy', 'legacy_proxy_us')
     )
 
     Add-Type -AssemblyName System.Net.Http
@@ -707,12 +710,14 @@ function Invoke-ResumableDownload {
     $directAvailable = Test-DirectConnection -Uri $Uri -TimeoutSec 10
     Write-Host "stage=DOWNLOAD operation=RESUMABLE_DOWNLOAD direct_probed=$directAvailable"
     $routeErrors = @{}
-    foreach ($route in @('direct', 'embedded_proxy', 'legacy_proxy', 'legacy_proxy_us')) {
+    foreach ($route in $Routes) {
         for ($attempt = 1; $attempt -le 2; $attempt++) {
             $handler = $client = $response = $inputStream = $outputStream = $request = $cancel = $null
             $headRequest = $headResponse = $headCancel = $null
             [long]$resumeFrom = 0
             $result = 'ok'
+            $attemptMessage = ''
+            $startingEmbeddedProxy = $false
             $succeeded = $false
             $clock = [Diagnostics.Stopwatch]::StartNew()
             try {
@@ -720,7 +725,9 @@ function Invoke-ResumableDownload {
                 $handler.UseProxy = $false
                 if ($route -ne 'direct') {
                     if ($route -eq 'embedded_proxy') {
+                        $startingEmbeddedProxy = $true
                         $proxyUrl = Start-EmbeddedProxy
+                        $startingEmbeddedProxy = $false
                     } elseif ($route -eq 'legacy_proxy_us') {
                         $proxyUrl = 'http://us.thz.quest:18888'
                     } else {
@@ -802,6 +809,23 @@ function Invoke-ResumableDownload {
             } catch {
                 $result = $_.Exception.GetType().Name
                 $routeErrors[$route] = $_.Exception.Message
+                $innermost = $_.Exception
+                while ($null -ne $innermost.InnerException) { $innermost = $innermost.InnerException }
+                $attemptMessage = $innermost.Message -replace '[\r\n]+', ' '
+                # Exception text may contain request URLs or subscription credentials.
+                $attemptMessage = $attemptMessage -replace '(?i)\b(?:https?|socks5?|hysteria2|hy2)://[^\s''"<>]+', '[redacted-url]'
+                $attemptMessage = $attemptMessage -replace '(?i)\b(?:[a-z0-9_]*(?:token|password|secret|authorization|subscription)[a-z0-9_]*|passwd|auth)\s*[:=]\s*\S+', '[redacted-credential]'
+                foreach ($sensitive in @([string]$script:InstallToken, [string]$TOKEN_EMB)) {
+                    if (-not [string]::IsNullOrEmpty($sensitive)) {
+                        $attemptMessage = $attemptMessage.Replace($sensitive, '[redacted]')
+                        $attemptMessage = $attemptMessage.Replace([Uri]::EscapeDataString($sensitive), '[redacted]')
+                    }
+                }
+                if ($startingEmbeddedProxy) {
+                    # Startup exceptions may include arbitrary subscription payloads.
+                    $attemptMessage = '[redacted proxy setup error]'
+                }
+                if ($attemptMessage.Length -gt 120) { $attemptMessage = $attemptMessage.Substring(0, 120) }
             } finally {
                 if ($cancel) { $cancel.Cancel() }
                 if ($inputStream) { $inputStream.Dispose() }
@@ -814,7 +838,9 @@ function Invoke-ResumableDownload {
                 $clock.Stop()
                 [long]$size = 0
                 if ([IO.File]::Exists($OutFile)) { $size = (Get-Item -LiteralPath $OutFile).Length }
-                $script:DownloadAttemptLog += 'route={0} attempt={1} resume_from={2} size={3} result={4}' -f $route, $attempt, $resumeFrom, $size, $result
+                $attemptEntry = 'route={0} attempt={1} resume_from={2} size={3} result={4}' -f $route, $attempt, $resumeFrom, $size, $result
+                if ($result -ne 'ok') { $attemptEntry += ' msg=' + $attemptMessage }
+                $script:DownloadAttemptLog += $attemptEntry
             }
             if ($succeeded) { return }
         }

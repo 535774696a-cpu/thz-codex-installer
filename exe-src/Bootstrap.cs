@@ -12,7 +12,7 @@ using System.Xml;
 using System.Security.AccessControl;
 using System.Security.Principal;
 [assembly: AssemblyTitle("特好装 Codex 测试安装程序")]
-[assembly: AssemblyVersion("4.6.3.0")]
+[assembly: AssemblyVersion("4.6.4.0")]
 public static partial class Bootstrap {
  static string stage="UNEXPECTED", errorCode="UNEXPECTED_FAILED", logPath;
  static readonly bool CiTest = string.Equals(Environment.GetEnvironmentVariable("THZ_CI_TEST"), "1", StringComparison.Ordinal);
@@ -58,14 +58,14 @@ public static partial class Bootstrap {
  }
  static void Log(string result,Exception error){
   if(result=="PASS")errorCode="NONE";
-  try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.3.0 windows="+RealOsBuild+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
+  try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.4.0 windows="+RealOsBuild+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
  }
  static void LogDetail(string code,string candidate,Exception error){
   try{
    string msg=error==null?"NONE":(error.GetType().FullName+": "+(error.Message??"")).Replace("\r"," ").Replace("\n"," ");
    if(msg.Length>600)msg=msg.Substring(0,600);
    string cand=(candidate??"NONE").Replace("\r"," ").Replace("\n"," ");
-   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.3.0 windows="+RealOsBuild+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
+   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.4.0 windows="+RealOsBuild+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
   }catch{}
  }
  static void Stage(string value,string code){stage=value;errorCode=code;Log("PENDING",null);}

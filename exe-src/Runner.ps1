@@ -1,8 +1,8 @@
 ﻿#requires -Version 5.1
 $ErrorActionPreference = 'Stop'
 $script:phase='PREFLIGHT'; $script:diagnosticCode='POWERSHELL_INITIALIZATION_FAILED'
-# 与 C# 启动器 AssemblyVersion 保持一致（P0 移植：版本号统一 4.6.3.0）。
-$script:InstallerVersion='4.6.3.0'
+# 与 C# 启动器 AssemblyVersion 保持一致（P0 移植：版本号统一 4.6.4.0）。
+$script:InstallerVersion='4.6.4.0'
 # 真实 BuildNumber：[Environment]::OSVersion.Version 在无 Win10+ manifest 时被兼容垫片固定为 6.2.9200，日志改用 CIM 取真实值
 function Get-RealOsBuild {
     try {
@@ -13,7 +13,7 @@ function Get-RealOsBuild {
 }
 function Write-SafeDiagnostic([string]$Result,[string]$ExceptionType='NONE',[string]$ExitCode='NONE') {
     try {
-        $line = [DateTime]::UtcNow.ToString('o')+' installer=4.6.3.0 windows='+(Get-RealOsBuild)+' stage='+$script:phase+' code='+$(if($Result -eq 'PENDING'){'NONE'}else{$script:diagnosticCode})+' exit='+$ExitCode+' exception='+$ExceptionType+' workspace='+$PSScriptRoot+' verification='+$Result
+        $line = [DateTime]::UtcNow.ToString('o')+' installer=4.6.4.0 windows='+(Get-RealOsBuild)+' stage='+$script:phase+' code='+$(if($Result -eq 'PENDING'){'NONE'}else{$script:diagnosticCode})+' exit='+$ExitCode+' exception='+$ExceptionType+' workspace='+$PSScriptRoot+' verification='+$Result
         [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
     } catch {}
 }

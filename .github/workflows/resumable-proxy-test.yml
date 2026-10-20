@@ -1,0 +1,73 @@
+name: Resumable Proxy Test (PS 5.1)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proxy-download:
+    name: ${{ matrix.route }} / Windows PowerShell 5.1
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        route: [legacy_proxy, legacy_proxy_us]
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell sources
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) {
+            throw 'Windows PowerShell 5.1 is required'
+          }
+          foreach ($path in @('exe-src/InstallerLibrary.ps1', 'exe-src/Runner.ps1', 'tools/probe-proxy-setup.ps1')) {
+            $tokens = $null
+            $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $path), [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count) { $parseErrors | Format-List; throw "Parse failed: $path" }
+            Write-Host "ParseFile PASS: $path"
+          }
+      - name: Probe proxy setup and production byte transfer
+        run: ./tools/probe-proxy-setup.ps1
+      - name: Download complete ChatGPT MSIX through selected proxy
+        env:
+          TEST_ROUTE: ${{ matrix.route }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./exe-src/InstallerLibrary.ps1
+          $BASE_URL = 'https://codex.thz.quest'
+          $script:DownloadAttemptLog = @()
+          $route = $env:TEST_ROUTE
+          $uri = 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT-x64.msix'
+          $outFile = Join-Path $env:RUNNER_TEMP "chatgpt-$route.msix"
+          $proxy = 'http://codex.thz.quest:18888'
+          if ($route -eq 'legacy_proxy_us') { $proxy = 'http://us.thz.quest:18888' }
+          try {
+            # HEAD uses the same proxy route; require the full official file size.
+            $head = Invoke-WebRequest -Uri $uri -Method Head -Proxy $proxy -UseBasicParsing -TimeoutSec 60
+            [long]$expected = $head.Headers['Content-Length']
+            if ($expected -le 0) { throw 'HEAD did not return a positive Content-Length' }
+            Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
+            if ($route -eq 'legacy_proxy') {
+              Invoke-ResumableDownload -Uri $uri -OutFile $outFile -Routes @('legacy_proxy')
+            } else {
+              Invoke-ResumableDownload -Uri $uri -OutFile $outFile -Routes @('legacy_proxy_us')
+            }
+            [long]$size = (Get-Item -LiteralPath $outFile).Length
+            if ($size -le 0 -or $size -ne $expected) { throw "Size mismatch: actual=$size expected=$expected" }
+            $ok = @($script:DownloadAttemptLog | Where-Object { $_ -match ('^route=' + [regex]::Escape($route) + ' .* result=ok$') })
+            if ($ok.Count -eq 0) { throw "No successful attempt for $route" }
+            if (@($script:DownloadAttemptLog | Where-Object { $_ -notmatch ('^route=' + [regex]::Escape($route) + ' ') }).Count) {
+              throw 'Unexpected route in attempt log'
+            }
+            Write-Host "PASS route=$route bytes=$size expected=$expected"
+          } finally {
+            $script:DownloadAttemptLog | ForEach-Object { Write-Host $_ }
+            Remove-Item -LiteralPath $outFile -Force -ErrorAction SilentlyContinue
+          }
