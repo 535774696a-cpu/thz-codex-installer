@@ -722,8 +722,9 @@ function Invoke-ResumableDownload {
             $clock = [Diagnostics.Stopwatch]::StartNew()
             try {
                 $handler = New-Object System.Net.Http.HttpClientHandler
-                $handler.UseProxy = $false
-                if ($route -ne 'direct') {
+                if ($route -eq 'direct') {
+                    $handler.UseProxy = $false
+                } else {
                     if ($route -eq 'embedded_proxy') {
                         $startingEmbeddedProxy = $true
                         $proxyUrl = Start-EmbeddedProxy
@@ -734,6 +735,10 @@ function Invoke-ResumableDownload {
                         $baseServerUri = New-Object System.Uri($BASE_URL)
                         $proxyUrl = 'http://{0}:18888' -f $baseServerUri.Host
                     }
+                    # .NET Framework HttpClientHandler: assigning Proxy while UseProxy=$false throws
+                    # InvalidOperationException ("The UseProxy property must be set to 'true' to use
+                    # this property"), surfaced as SetValueInvocationException. Assign Proxy first,
+                    # then UseProxy=$true. Probe evidence: tools/probe-proxy-setup.ps1 variant C.
                     $handler.Proxy = New-Object System.Net.WebProxy($proxyUrl)
                     $handler.UseProxy = $true
                 }

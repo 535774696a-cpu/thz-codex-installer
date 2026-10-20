@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$BaseUrl = 'https://codex.thz.quest',
-    [string]$TestUri = 'https://www.microsoft.com/robots.txt'
+    [string]$TestUri = 'https://www.google.com/robots.txt'
 )
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion -lt [version]'5.1' -or $PSVersionTable.PSVersion.Major -ne 5) {
