@@ -1,8 +1,8 @@
 ﻿#requires -Version 5.1
 $ErrorActionPreference = 'Stop'
 $script:phase='PREFLIGHT'; $script:diagnosticCode='POWERSHELL_INITIALIZATION_FAILED'
-# 与 C# 启动器 AssemblyVersion 保持一致（P0 移植：版本号统一 4.6.4.0）。
-$script:InstallerVersion='4.6.4.0'
+# 与 C# 启动器 AssemblyVersion 保持一致（P0 移植：版本号统一 4.6.5.0）。
+$script:InstallerVersion='4.6.5.0'
 # 真实 BuildNumber：[Environment]::OSVersion.Version 在无 Win10+ manifest 时被兼容垫片固定为 6.2.9200，日志改用 CIM 取真实值
 function Get-RealOsBuild {
     try {
@@ -13,7 +13,7 @@ function Get-RealOsBuild {
 }
 function Write-SafeDiagnostic([string]$Result,[string]$ExceptionType='NONE',[string]$ExitCode='NONE') {
     try {
-        $line = [DateTime]::UtcNow.ToString('o')+' installer=4.6.4.0 windows='+(Get-RealOsBuild)+' stage='+$script:phase+' code='+$(if($Result -eq 'PENDING'){'NONE'}else{$script:diagnosticCode})+' exit='+$ExitCode+' exception='+$ExceptionType+' workspace='+$PSScriptRoot+' verification='+$Result
+        $line = [DateTime]::UtcNow.ToString('o')+' installer=4.6.5.0 windows='+(Get-RealOsBuild)+' stage='+$script:phase+' code='+$(if($Result -eq 'PENDING'){'NONE'}else{$script:diagnosticCode})+' exit='+$ExitCode+' exception='+$ExceptionType+' workspace='+$PSScriptRoot+' verification='+$Result
         [IO.File]::AppendAllText($env:THZ_DIAGNOSTIC_LOG,$line+[Environment]::NewLine)
     } catch {}
 }
@@ -43,6 +43,20 @@ function ConvertTo-SafeDiagDetail([string]$Text) {
     if ($safe.Length -gt 800) { $safe = $safe.Substring($safe.Length - 800) }
     return $safe
 }
+function Set-LicenseStartFailure($Response) {
+    if ($null -eq $Response) { return }
+    $serverCode = [string]$Response.error
+    if ($serverCode -notmatch '\A[a-zA-Z0-9_]{1,64}\z') { $serverCode = 'UNRECOGNIZED_OR_ABSENT' }
+    # Remove whole URLs and token-shaped strings before truncation or persistence.
+    $message = [string]$Response.message
+    $token = [string]$script:InstallToken
+    if (-not [string]::IsNullOrWhiteSpace($token)) { $message = $message.Replace($token, '[REDACTED]') }
+    $message = $message -replace '(?i)https?://[^\s<>"]+', '[URL REDACTED]'
+    $message = $message -replace '[A-Za-z0-9_-]{64,}', '[REDACTED]'
+    $script:LicenseStartMessage = ConvertTo-SafeDiagDetail $message
+    $script:LicenseStartFailDetail = 'server_error=' + $serverCode + ' message=' + $script:LicenseStartMessage
+}
+
 function Write-InstallProcessEvent {
     param([string]$State,[string]$ExitCode='NONE',[bool]$TimedOut=$false,[string]$ExceptionType='NONE',[string]$Stdout='',[string]$Stderr='')
     if (@('install_process_started','install_process_completed','install_process_failed') -notcontains $State) { return }
@@ -74,7 +88,7 @@ function Write-LicenseRequestEvent {
     $allowed=@{'LICENSE_VERIFY'='/api/license/verify';'LICENSE_SELECT_ROUTE'='/api/installer/select-route';'LICENSE_START'='/api/installer/start';'LICENSE_COMPLETE'='/api/installer/complete'}
     if(-not $allowed.ContainsKey($Operation) -or $allowed[$Operation] -ne $Path){return}
     if(@('request_started','request_completed','request_failed') -notcontains $State){return}
-    $codes=@('INVALID_LICENSE','LICENSE_DISABLED','LICENSE_EXPIRED','LICENSE_REVOKED','DEVICE_MISMATCH','DEVICE_FINGERPRINT_INVALID','RATE_LIMITED','invalid_session','session_expired','invalid_token','token_expired','token_used','catalog_unavailable','public_base_url_invalid','INVALID_RESPONSE')
+    $codes=@('INVALID_LICENSE','LICENSE_DISABLED','LICENSE_EXPIRED','LICENSE_REVOKED','DEVICE_MISMATCH','DEVICE_FINGERPRINT_INVALID','RATE_LIMITED','invalid_session','session_expired','invalid_token','token_invalid','token_state_invalid','token_device_mismatch','license_inactive','route_unavailable','token_expired','token_used','catalog_unavailable','public_base_url_invalid','INVALID_RESPONSE')
     if($codes -notcontains $ServerCode){$ServerCode='UNRECOGNIZED_OR_ABSENT'}
     if($Status -notmatch '^\d{3}$'){$Status='NONE'}
     if($ExceptionType -notmatch '^[A-Za-z0-9_.]+$'){$ExceptionType='UNKNOWN'}
@@ -211,6 +225,7 @@ function Invoke-LicenseRequest {
         $state=if($null -ne $result -and $result.ok -eq $true){'request_completed'}else{'request_failed'}
         $safeCode=if($null -ne $result){[string]$result.error}else{'INVALID_RESPONSE'}
         Write-LicenseRequestEvent -Operation $Operation -State $state -Path $Path -Received $true -ServerCode $safeCode
+        if ($Operation -eq 'LICENSE_START' -and $state -eq 'request_failed') { Set-LicenseStartFailure $result }
         return $result
     } catch {
         if ($null -ne $request) {
@@ -231,6 +246,7 @@ function Invoke-LicenseRequest {
                 $errorBody=$errorReader.ReadToEnd()
                 try{
                     $parsed=$errorBody|ConvertFrom-Json
+                    if ($Operation -eq 'LICENSE_START') { Set-LicenseStartFailure $parsed }
                     if(-not [string]::IsNullOrWhiteSpace([string]$parsed.error)){
                         $safeCode=[string]$parsed.error
                     }
@@ -425,6 +441,7 @@ function Invoke-InstallFailReport {
             installer_version = $script:InstallerVersion
         }
         $detail = ConvertTo-SafeDiagDetail ([string]$script:AppxFailDetail)
+        if ($code -eq 'LICENSE_START_FAILED') { $detail = [string]$script:LicenseStartFailDetail }
         if (-not [string]::IsNullOrWhiteSpace($detail)) { $payload.detail = $detail }
         $body = $payload | ConvertTo-Json
         $bodyBytes = [Text.Encoding]::UTF8.GetBytes($body)
@@ -449,6 +466,7 @@ Add-Type -AssemblyName System.Drawing
     Remove-Item Env:THZ_INSTALL_TICKET -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($script:InstallToken) -or $script:InstallToken -notmatch '^[A-Za-z0-9_-]{32,128}$') { throw 'INSTALLATION_TICKET_INVALID' }
     Set-DiagnosticStage 'LICENSE_START' 'LICENSE_START_FAILED'
+    $script:LicenseStartMessage = ''; $script:LicenseStartFailDetail = ''
     $cfg=Invoke-ApiStart -Token $script:InstallToken
     if ($cfg.client_type -notin @('cli','desktop') -or $cfg.provider_type -notin @('deepseek','chatgpt','claude','gemini') -or $cfg.mode -ne $cfg.provider_type) { throw 'INSTALL_PLAN_MISMATCH' }
     if (($cfg.provider_type -eq 'deepseek' -and $cfg.route -ne 'A') -or ($cfg.provider_type -in @('chatgpt','claude','gemini') -and $cfg.route -ne 'C')) { throw 'INSTALL_PLAN_MISMATCH' }
@@ -567,6 +585,9 @@ Add-Type -AssemblyName System.Drawing
     # Only fixed codes and exception type; never exception messages, bodies or invocation data.
     $known=@('CONFIG_HOME_INVALID','INSTALLATION_TICKET_INVALID','INSTALL_PLAN_MISMATCH','EXISTING_CODEX_CONFLICT','PROVIDER_INVALID','CONFIG_LOCATION_INVALID','CONFIG_INVALID','MODEL_INVALID','PROVIDER_URL_INVALID','CATALOG_PATH_INVALID','MODEL_CATALOG_INVALID','KEY_INPUT_CANCELLED','KEY_VALIDATION_FAILED','KEY_ATTEMPTS_EXHAUSTED','VERIFY_EXECUTABLE_MISSING','VERIFY_START_FAILED','VERIFY_TIMEOUT','VERIFY_EXIT_CODE','VERIFY_INVALID_VERSION','OFFICIAL_INSTALL_START_FAILED','OFFICIAL_INSTALL_TIMEOUT','OFFICIAL_INSTALL_FAILED','OFFICIAL_INSTALL_OUTPUT_MISSING','DESKTOP_WINDOWS_TOO_OLD','DESKTOP_ARCH_UNSUPPORTED','DESKTOP_SOURCE_INVALID','DESKTOP_DOWNLOAD_FAILED','DESKTOP_PACKAGE_TOO_SMALL','DESKTOP_MSIX_FORMAT_INVALID','DESKTOP_PACKAGE_IDENTITY_INVALID','DESKTOP_SIGNATURE_INVALID','DESKTOP_PUBLISHER_INVALID','DESKTOP_APPX_UNAVAILABLE','DESKTOP_APPX_INSTALL_FAILED','DESKTOP_APPX_DEPENDENCY_FAILED','DESKTOP_APPX_CERT_FAILED','DESKTOP_APPX_SERVICE_DISABLED','DESKTOP_APPX_ADMIN_REQUIRED','DESKTOP_DISK_SPACE_LOW','DESKTOP_ARCH_MISMATCH','DESKTOP_PACKAGE_VERIFY_FAILED','DESKTOP_APP_REGISTRATION_MISSING','DESKTOP_VERIFY_FAILED')
     if ($script:phase -notlike 'LICENSE_*' -and $known -contains $_.Exception.Message) { $script:diagnosticCode=$_.Exception.Message }
+    if ($script:diagnosticCode -eq 'LICENSE_START_FAILED' -and $script:LicenseStartMessage) {
+        try { [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'license-start-message.txt'), $script:LicenseStartMessage, [Text.Encoding]::UTF8) } catch {}
+    }
     # P0-2: 上报固定码及已脱敏的 APPX detail；上报失败不影响退出流程
     try { Invoke-InstallFailReport } catch { }
     Write-SafeDiagnostic 'FAILED' ($_.Exception.GetType().FullName) '1'

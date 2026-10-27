@@ -12,7 +12,7 @@ using System.Xml;
 using System.Security.AccessControl;
 using System.Security.Principal;
 [assembly: AssemblyTitle("特好装 Codex 测试安装程序")]
-[assembly: AssemblyVersion("4.6.4.0")]
+[assembly: AssemblyVersion("4.6.5.0")]
 public static partial class Bootstrap {
  static string stage="UNEXPECTED", errorCode="UNEXPECTED_FAILED", logPath;
  static readonly bool CiTest = string.Equals(Environment.GetEnvironmentVariable("THZ_CI_TEST"), "1", StringComparison.Ordinal);
@@ -58,17 +58,26 @@ public static partial class Bootstrap {
  }
  static void Log(string result,Exception error){
   if(result=="PASS")errorCode="NONE";
-  try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.4.0 windows="+RealOsBuild+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
+  try{File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.5.0 windows="+RealOsBuild+" stage="+stage+" code="+(result=="PENDING"?"NONE":errorCode)+" exit="+(lastExit.HasValue?lastExit.Value.ToString():"NONE")+" exception="+(error==null?"NONE":error.GetType().FullName)+" workspace="+(workspace??"NONE")+" verification="+result+Environment.NewLine);}catch{}
  }
  static void LogDetail(string code,string candidate,Exception error){
   try{
    string msg=error==null?"NONE":(error.GetType().FullName+": "+(error.Message??"")).Replace("\r"," ").Replace("\n"," ");
    if(msg.Length>600)msg=msg.Substring(0,600);
    string cand=(candidate??"NONE").Replace("\r"," ").Replace("\n"," ");
-   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.4.0 windows="+RealOsBuild+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
+   File.AppendAllText(logPath,DateTime.UtcNow.ToString("o")+" installer=4.6.5.0 windows="+RealOsBuild+" stage=EXTRACT code="+code+" candidate="+cand+" exception_detail="+msg+Environment.NewLine);
   }catch{}
  }
  static void Stage(string value,string code){stage=value;errorCode=code;Log("PENDING",null);}
+ static string LicenseStartMessage(){
+  if(errorCode!="LICENSE_START_FAILED"||String.IsNullOrEmpty(workspace))return null;
+  try{
+   string path=Path.Combine(workspace,"license-start-message.txt");Safety.NoLinks(workspace,path);
+   if(new FileInfo(path).Length>4096)return null;
+   string message=File.ReadAllText(path,System.Text.Encoding.UTF8).Trim();
+   return String.IsNullOrWhiteSpace(message)?null:message;
+  }catch{return null;}
+ }
  static string Failure(Exception error){
   if(error is InvalidOperationException&&error.Message=="INSTALLATION_TICKET_TRUNCATED")errorCode="INSTALLATION_TICKET_TRUNCATED";
   Log("FAILED",error);
@@ -78,6 +87,8 @@ public static partial class Bootstrap {
   if(errorCode=="DESKTOP_APPX_SERVICE_DISABLED")return "应用安装未完成。\n系统部署服务被禁用，请联系系统管理员检查 AppXSVC、ClipSVC 等部署服务后重试。\n如需帮助，请联系客服 QQ：89523844";
   if(errorCode=="DESKTOP_APPX_ADMIN_REQUIRED")return "应用安装未完成。\n这个安装需要管理员权限：请关闭安装器，右键安装包选择「以管理员身份运行」后重试。\n如需帮助，请联系客服 QQ：89523844";
   if(errorCode=="DESKTOP_DISK_SPACE_LOW")return "应用安装未完成。\n电脑磁盘空间不足，请先清理 C 盘、腾出至少 5GB 空间后重试（可删除不用的大文件或运行系统「磁盘清理」）。\n如需帮助，请联系客服 QQ：89523844";
+  string serverMessage=LicenseStartMessage();
+  if(serverMessage!=null)return "安装未完成。\n错误阶段："+stage+"\n错误代码："+errorCode+"\n"+serverMessage+"\n如需帮助请联系客服 QQ：89523844";
   return "安装未完成。\n错误阶段："+stage+"\n错误代码："+errorCode+"\nSAFE_MESSAGE：当前阶段未完成，请截图此窗口联系客服。\nQQ：89523844\n"+(logPath!=null&&File.Exists(logPath)?"诊断日志已保留。\n诊断日志："+logPath:"诊断日志无法写入，请保留此窗口截图。");
  }
  static void ChildFailure(){

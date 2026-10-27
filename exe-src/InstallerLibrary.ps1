@@ -46,7 +46,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$ScriptVersion = '4.6.4.0'
+$ScriptVersion = '4.6.5.0'
 # Microsoft-owned aka.ms links, downloaded and manifest-verified on 2026-10-19.
 $THZ_VCLIBS_URL_X64 = 'https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx'
 $THZ_VCLIBS_URL_ARM64 = 'https://aka.ms/Microsoft.VCLibs.arm64.14.00.Desktop.appx'
@@ -1092,6 +1092,7 @@ function Invoke-ApiStart {
         if (-not $resp.ok) { throw ($resp.message) }
         return $resp
     } catch {
+        if (-not [string]::IsNullOrWhiteSpace([string]$script:LicenseStartMessage)) { throw $script:LicenseStartMessage }
         $detail = $null
         if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
             try { $detail = ($_.ErrorDetails.Message | ConvertFrom-Json).message } catch { $detail = $null }

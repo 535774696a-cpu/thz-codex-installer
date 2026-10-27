@@ -69,6 +69,9 @@ jobs:
             throw "PSScriptAnalyzer reported $($results.Count) Error-severity finding(s)."
           }
 
+      - name: License start diagnostics regression
+        run: .\tests\license-start-diagnostics.ps1
+
       - name: Compile
         run: |
           $ErrorActionPreference = 'Stop'
