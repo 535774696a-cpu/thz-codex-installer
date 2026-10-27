@@ -91,6 +91,9 @@ jobs:
             .\exe-src\build.ps1 -BaseUrl 'http://64.83.26.242:18081' -TestHook -OutDir (Join-Path $PWD 'dist')
           }
 
+      - name: Built EXE license dialog regression
+        run: .\tests\license-start-diagnostics.ps1 -BuiltExe .\dist\THZ-Codex-Setup.exe
+
       - name: Ticket stamping smoke test
         run: |
           $ErrorActionPreference = 'Stop'

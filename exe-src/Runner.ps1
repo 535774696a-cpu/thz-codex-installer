@@ -228,15 +228,13 @@ function Invoke-LicenseRequest {
         if ($Operation -eq 'LICENSE_START' -and $state -eq 'request_failed') { Set-LicenseStartFailure $result }
         return $result
     } catch {
-        if ($null -ne $request) {
-            $request.Abort()
-        }
         $record=$_; $status='NONE';$received=$false;$type=$record.Exception.GetType().FullName;$safeCode='NONE'
         $state='request_failed'
         $errorResponse=$null
-        if($record.Exception -is [Net.WebException]){
-            $errorResponse=$record.Exception.Response
-        }
+        # PowerShell wraps EndGetResponse exceptions in MethodInvocationException.
+        $cause = $record.Exception
+        while ($null -ne $cause -and $cause -isnot [Net.WebException]) { $cause = $cause.InnerException }
+        if ($cause -is [Net.WebException]) { $errorResponse = $cause.Response }
         if($null -ne $errorResponse){
             $received=$true
             try{$status=[string][int]$errorResponse.StatusCode}catch{}
@@ -271,6 +269,7 @@ function Invoke-LicenseRequest {
         if ($null -ne $response) {
             $response.Dispose()
         }
+        if ($null -ne $request) { $request.Abort() }
         $clock.Stop()
     }
 }

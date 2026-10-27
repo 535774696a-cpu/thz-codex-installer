@@ -1,4 +1,5 @@
 ﻿#requires -Version 5.1
+param([string]$BuiltExe = '')
 $ErrorActionPreference = 'Stop'
 # Load functions only; never execute installer entry points or contact production.
 foreach ($file in @('exe-src/Runner.ps1','exe-src/InstallerLibrary.ps1')) {
@@ -28,3 +29,24 @@ function Invoke-LicenseRequest { return [pscustomobject]@{ok=$true;client_type='
 $result = Invoke-ApiStart -Token $script:InstallToken
 if (-not $result.ok -or $result.client_type -ne 'cli') { throw 'Success response changed' }
 Write-Host 'PASS: six server errors, Chinese message, redaction, successful start response (isolated tests; no staging claims).'
+
+if ($BuiltExe) {
+    $assembly = [Reflection.Assembly]::LoadFile([IO.Path]::GetFullPath($BuiltExe))
+    $type = $assembly.GetType('Bootstrap')
+    $flags = [Reflection.BindingFlags]'NonPublic,Static'
+    $dir = Join-Path $env:TEMP ('license-message-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    try {
+        $text = '安装授权已过期，请回到安装页面重新下载'
+        [IO.File]::WriteAllText((Join-Path $dir 'license-start-message.txt'), $text, [Text.Encoding]::UTF8)
+        $type.GetField('workspace', $flags).SetValue($null, $dir)
+        $type.GetField('errorCode', $flags).SetValue($null, 'LICENSE_START_FAILED')
+        $type.GetField('stage', $flags).SetValue($null, 'LICENSE_START')
+        $dialog = $type.GetMethod('Failure', $flags).Invoke($null, @([Exception]::new('test')))
+        if (-not $dialog.Contains($text) -or $dialog.Contains('SAFE_MESSAGE')) { throw 'Dialog lost server message' }
+        Remove-Item -LiteralPath (Join-Path $dir 'license-start-message.txt')
+        $dialog = $type.GetMethod('Failure', $flags).Invoke($null, @([Exception]::new('test')))
+        if (-not $dialog.Contains('SAFE_MESSAGE')) { throw 'Dialog fallback missing' }
+        Write-Host 'PASS: built EXE dialog text preserves server message and falls back when absent.'
+    } finally { Remove-Item -LiteralPath $dir -Recurse -Force }
+}
