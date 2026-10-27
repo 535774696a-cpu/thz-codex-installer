@@ -6,7 +6,7 @@
 @@ -1,1 +1,1 @@
 -            message = str(body.get("message", ""))[:200]
 +            message = str(body.get("message", ""))[:200].replace('\r', ' ').replace('\n', ' ').replace(str(body.get("install_token", "")) or '\x00', '<redacted>')
-@@ -1,7 +1,8 @@
+@@ -1096,6 +1096,7 @@
 -                "installer fail step=%s code=%s ver=%s token=%s detail=%s",
 +                "installer fail step=%s code=%s ver=%s token=%s detail=%s message=%s",
                  step,
