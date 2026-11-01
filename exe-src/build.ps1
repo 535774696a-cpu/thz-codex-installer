@@ -67,45 +67,7 @@ try {
         $runnerText = $runnerText.Replace($licenseGuard, $testLicenseGuard)
         [System.IO.File]::WriteAllText($runnerPath, $runnerText, $utf8Bom)
 
-        Write-Host "Applying CI test hook to staged InstallerLibrary.ps1"
-        $hookPath = Join-Path $stage 'InstallerLibrary.ps1'
-        $hookText = [System.IO.File]::ReadAllText($hookPath)
-        if ($hookText.Contains("`r`n")) { $hookEol = "`r`n" } else { $hookEol = "`n" }
-        $hookLines = [System.Text.RegularExpressions.Regex]::Split($hookText, "\r?\n")
-        $hookList = New-Object System.Collections.ArrayList
-        $hookList.AddRange($hookLines) | Out-Null
-
-        $anchorGui = '        $res=Show-DeepSeekKeyGuiDialog'
-        $guiIdx = @()
-        for ($i = 0; $i -lt $hookList.Count; $i++) { if ($hookList[$i] -ceq $anchorGui) { $guiIdx += $i } }
-        if ($guiIdx.Count -ne 1) { throw "TestHook: expected 1 Show-DeepSeekKeyGuiDialog call site, found $($guiIdx.Count)" }
-        $gi = $guiIdx[0]
-        $assertLine = '    Assert-CodexConfigPaths -CodexHome $CodexHome -ConfigPath $ConfigPath -ModelsPath $ModelsPath'
-        if ($hookList[$gi - 2] -cne $assertLine) { throw "TestHook: anchor context mismatch near Show-DeepSeekKeyGuiDialog" }
-
-        $hookList[$gi] = '        if($hookMode){$res=@{Ok=$true;Key=$hookKey};$hookKey=$null}else{$res=Show-DeepSeekKeyGuiDialog}'
-
-        $lenPrefix = '        if($key.Length -lt 12){[Windows.Forms.MessageBox]::Show('
-        $lenIdx = @()
-        for ($i = 0; $i -lt $hookList.Count; $i++) { if ($hookList[$i].StartsWith($lenPrefix)) { $lenIdx += $i } }
-        if ($lenIdx.Count -ne 1) { throw "TestHook: expected 1 key-length check, found $($lenIdx.Count)" }
-        $hookList[$lenIdx[0]] = $hookList[$lenIdx[0]].Replace($lenPrefix, '        if($key.Length -lt 12){if($hookMode){$key=$null;$hookKey=$null;throw ''KEY_INVALID''};[Windows.Forms.MessageBox]::Show(')
-
-        $retryPrefix = '            $retry=[Windows.Forms.MessageBox]::Show('
-        $nullLine = '            $key=$null'
-        $valIdx = @()
-        for ($i = 0; $i -lt $hookList.Count - 1; $i++) {
-            if ($hookList[$i] -ceq $nullLine -and $hookList[$i + 1].StartsWith($retryPrefix)) { $valIdx += $i }
-        }
-        if ($valIdx.Count -ne 1) { throw "TestHook: expected 1 validation-failure site, found $($valIdx.Count)" }
-        $hookList.Insert($valIdx[0] + 1, '            if($hookMode){throw ''KEY_VALIDATION_FAILED''}')
-
-        $hookList.Insert($gi - 1, '    $hookMode=-not [string]::IsNullOrWhiteSpace($hookKey)')
-        $hookList.Insert($gi - 1, '    $hookKey=[Environment]::GetEnvironmentVariable(''THZ_DEEPSEEK_KEY'')')
-
-        $hookedText = [string]::Join($hookEol, $hookList.ToArray())
-        [System.IO.File]::WriteAllText($hookPath, $hookedText, $utf8Bom)
-        Write-Host "TestHook applied: 5 edits"
+        Write-Host "TestHook applied: 1 license-guard edit"
     } else {
         if ($licenseGuardCount -ne 1) {
             throw "Production build: expected 1 strict license BASE_URL guard, found $licenseGuardCount"

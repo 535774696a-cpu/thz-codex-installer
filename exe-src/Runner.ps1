@@ -475,22 +475,10 @@ Add-Type -AssemblyName System.Drawing
         }
     }
     if ($cfg.client_type -eq 'desktop') {
-        # CONFIG 阶段：可选配置 DeepSeek API Key（用户取消/选否不抛致命错误）
         Set-DiagnosticStage 'CONFIG' 'LOCAL_CONFIG_FAILED'
-        if ($cfg.provider_type -in @('chatgpt','deepseek')) {
-            $dsResult=Invoke-ChatGPTDeepSeekOptionalSetup
+        if ($cfg.provider_type -eq 'chatgpt') {
             try {
-                if (-not $dsResult.Configured) {
-                    if (-not (Test-OpenAIDirectAccess)) { Show-OpenAINetworkNotice }
-                }
-            }
-            catch {
-            }
-        }
-        if ($cfg.provider_type -eq 'claude') {
-            # Claude Desktop 装完后，可选为 Claude Code 配置 DeepSeek（用户取消/选否不抛致命错误）
-            try {
-                $null=Invoke-ClaudeCodeDeepSeekOptionalSetup
+                if (-not (Test-OpenAIDirectAccess)) { Show-OpenAINetworkNotice }
             }
             catch {
             }
@@ -530,30 +518,20 @@ Add-Type -AssemblyName System.Drawing
         New-Item -ItemType Directory -Path $homePath -Force | Out-Null
         $configPath=Join-Path $homePath 'config.toml';$modelsPath=Join-Path $homePath 'models.json'
         if ($cfg.provider_type -eq 'deepseek') {
-            $localKey=Invoke-DeepSeekKeySetup -CodexHome $homePath -ConfigPath $configPath -ModelsPath $modelsPath -Cfg $cfg -UseEnvironmentKey:($cfg.client_type -eq 'desktop')
-            $localKey=$null
+            # DeepSeek key configuration was removed from the installer; existing user config is preserved untouched.
         } else {
             $null=Set-OfficialAccountConfig -CodexHome $homePath -ConfigPath $configPath -ModelsPath $modelsPath
         }
         Set-DiagnosticStage 'CODEX_VERIFY' 'CODEX_VERSION_OR_CONFIG_FAILED'
         $version=if($cfg.client_type -eq 'cli'){Invoke-CodexProbe -Command $StandaloneExe}else{[string]$desktopPackage.Version}
-        $raw=[IO.File]::ReadAllText($configPath)
-        if ($cfg.provider_type -eq 'deepseek') {
-            $authValid=if($cfg.client_type -eq 'desktop'){$raw -match '(?m)^env_key\s*=\s*"DEEPSEEK_API_KEY"\s*$'}else{$raw -match '(?m)^experimental_bearer_token\s*=\s*"[^"\r\n]+"\s*$'}
-            if ($raw -notmatch '(?m)^model_provider\s*=\s*"deepseek"\s*$' -or $raw -notmatch '(?m)^\[model_providers\.deepseek\]\s*$' -or -not $authValid) { throw 'CONFIG_INVALID' }
-            if ($raw -notmatch ('(?m)^model\s*=\s*"'+[regex]::Escape($cfg.model)+'"\s*$')) { throw 'MODEL_INVALID' }
-            if ($raw -notmatch '(?m)^base_url\s*=\s*"https://api\.deepseek\.com/?"\s*$') { throw 'PROVIDER_URL_INVALID' }
-            $catalogPath=$modelsPath -replace '\\','/'
-            if ($raw -notmatch ('(?m)^model_catalog_json\s*=\s*"'+[regex]::Escape($catalogPath)+'"\s*$')) { throw 'CATALOG_PATH_INVALID' }
-            $models=[IO.File]::ReadAllText($modelsPath)|ConvertFrom-Json
-            if (@($models.models|ForEach-Object {$_.slug}) -notcontains $cfg.model) { throw 'MODEL_CATALOG_INVALID' }
-        } else {
+        if ($cfg.provider_type -ne 'deepseek') {
+            $raw=[IO.File]::ReadAllText($configPath)
             $top=($raw -split '(?m)^\s*\[')[0]
             if ($top -match '(?m)^\s*(model|model_provider|preferred_auth_method|forced_login_method|model_reasoning_effort|model_catalog_json)\s*=') { throw 'OFFICIAL_PROVIDER_CONFIG_INVALID' }
         }
         # Only hashes and paths, never configuration contents or keys, leave this child process.
         $proof=New-Object Xml.XmlDocument;$root=$proof.CreateElement('Verification');$null=$proof.AppendChild($root)
-        $values=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;Executable=$(if($cfg.client_type -eq 'cli'){$StandaloneExe}else{''});AppId=$(if($desktopAppId){$desktopAppId}else{''});Config=$configPath;Models=$(if(Test-Path -LiteralPath $modelsPath -PathType Leaf){$modelsPath}else{''});ConfigHash=(Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash;ModelsHash=$(if(Test-Path -LiteralPath $modelsPath -PathType Leaf){(Get-FileHash -LiteralPath $modelsPath -Algorithm SHA256).Hash}else{''})}
+        $values=@{Version=$version;ClientType=[string]$cfg.client_type;ProviderType=[string]$cfg.provider_type;Executable=$(if($cfg.client_type -eq 'cli'){$StandaloneExe}else{''});AppId=$(if($desktopAppId){$desktopAppId}else{''});Config=$configPath;Models=$(if(Test-Path -LiteralPath $modelsPath -PathType Leaf){$modelsPath}else{''});ConfigHash=$(if(Test-Path -LiteralPath $configPath -PathType Leaf){(Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash}else{''});ModelsHash=$(if(Test-Path -LiteralPath $modelsPath -PathType Leaf){(Get-FileHash -LiteralPath $modelsPath -Algorithm SHA256).Hash}else{''})}
         foreach($name in $values.Keys){$node=$proof.CreateElement($name);$node.InnerText=$values[$name];$null=$root.AppendChild($node)}
         $proof.Save((Join-Path $PSScriptRoot 'verification.xml'))
     }

@@ -168,16 +168,16 @@ public static partial class Bootstrap {
   ProbeDesktop(script);LogPostInstallLaunch("PASS",null);
  }
  static bool ShowFinishDialog(string detail){
-  using(var form=new Form()){form.Text=ProductName+" 已安装成功";form.Size=new Size(520,285);form.StartPosition=FormStartPosition.CenterScreen;form.FormBorderStyle=FormBorderStyle.FixedDialog;form.MaximizeBox=false;form.MinimizeBox=false;
-   var label=new Label{Text="✓ "+ProductName+" 已安装成功\n版本："+version+"\n"+detail,Dock=DockStyle.Top,Height=130,Padding=new Padding(20),AutoSize=false};form.Controls.Add(label);
-   var launch=new CheckBox{Text="安装完成后打开 "+ProductName,Checked=true,AutoSize=true,Left=24,Top=145};form.Controls.Add(launch);
-   var finish=new Button{Text="完成",Width=120,Height=40,Left=365,Top=190,DialogResult=DialogResult.OK};form.Controls.Add(finish);form.AcceptButton=finish;
+  using(var form=new Form()){form.Text="安装完成";form.ClientSize=new Size(620,350);form.StartPosition=FormStartPosition.CenterScreen;form.FormBorderStyle=FormBorderStyle.FixedDialog;form.MaximizeBox=false;form.MinimizeBox=false;
+   var label=new Label{Text="Codex 已安装完成。\n\n如需配置 DeepSeek 模型，请运行单独的 DeepSeek 配置器，输入你自己的 API Key（Key 只保存在你自己的电脑上）。\n\nAI 会员代充站：https://wzyp.cn/shop/thz\n客服 QQ：89523844",Dock=DockStyle.Top,Height=240,Padding=new Padding(20),AutoSize=false};form.Controls.Add(label);
+   var launch=new CheckBox{Text="安装完成后打开 "+ProductName,Checked=true,AutoSize=true,Left=24,Top=255};form.Controls.Add(launch);
+   var shop=new Button{Text="打开代充站",Width=120,Height=40,Left=340,Top=295};shop.Click+=(s,e)=>{Process.Start(new ProcessStartInfo("https://wzyp.cn/shop/thz"){UseShellExecute=true});form.Close();};form.Controls.Add(shop);
+   var finish=new Button{Text="关闭",Width=120,Height=40,Left=476,Top=295,DialogResult=DialogResult.OK};form.Controls.Add(finish);form.AcceptButton=finish;
    form.ShowDialog();return launch.Checked;
   }
  }
  static void CompleteAndOptionallyLaunch(string detail){
   if(CiTest){Console.WriteLine("THZ_CI_RESULT=PASS");return;}
-  if(providerType=="chatgpt")detail=(clientType=="desktop"?"Codex 桌面版已安装完成。\n请在 Codex 官方界面登录 ChatGPT / Codex 账号。":"Codex 终端版已安装完成。\n如尚未登录，请按 Codex 官方提示完成账号登录。")+"\n"+detail;
   if(!ShowFinishDialog(detail))return;
   while(true){try{if(clientType=="desktop")LaunchCodexDesktop();else LaunchCodexTerminal();return;}catch(Exception error){LogPostInstallLaunch("FAILED",error);var choice=Choice(ProductName+" 已安装成功",ProductName+" 已安装完成，但未能自动打开。\n你可以从开始菜单打开应用。",new[]{"重新启动","完成"});if(choice!="重新启动")return;}}
  }
