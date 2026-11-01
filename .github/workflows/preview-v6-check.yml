@@ -6,6 +6,8 @@ name: Preview v6 render check
 # installer releases; these endpoints are unchanged production routes).
 on:
   workflow_dispatch:
+  push:
+    branches: [preview/v6-render-check]
 
 jobs:
   render-check:
