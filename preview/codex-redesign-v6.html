@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="特好装 · Codex 一键安装，自动检查安装环境，一步步带你完成 Codex 的安装和配置。">
+  <title>特好装 · Codex 一键安装</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --surface: #ffffff;
+      --surface-soft: #f6f6f7;
+      --ink: #000000;
+      --muted: #6f6f76;
+      --line: rgba(0, 0, 0, 0.09);
+      --line-strong: rgba(0, 0, 0, 0.18);
+      --primary: #000000;
+      --primary-hover: #262626;
+      --primary-ink: #ffffff;
+      --indigo: #000000;
+      --cyan: #6f6f76;
+      --violet: #000000;
+      --amber: #6f6f76;
+      --hero-band: #f4f3f6;
+      --private-bg: #ffffff;
+      --private-ink: #000000;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04), 0 16px 40px rgba(0, 0, 0, 0.06);
+      --shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.05), 0 8px 20px rgba(0, 0, 0, 0.05), 0 24px 56px rgba(0, 0, 0, 0.08);
+      --nav-bg: rgba(255, 255, 255, 0.82);
+      --focus: rgba(0, 0, 0, 0.25);
+    }
+
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #000000;
+      --surface: #101010;
+      --surface-soft: #171717;
+      --ink: #f5f5f5;
+      --muted: #a1a1aa;
+      --line: rgba(255, 255, 255, 0.12);
+      --line-strong: rgba(255, 255, 255, 0.24);
+      --primary: #f5f5f5;
+      --primary-hover: #ffffff;
+      --primary-ink: #000000;
+      --indigo: #f5f5f5;
+      --cyan: #a1a1aa;
+      --violet: #f5f5f5;
+      --amber: #a1a1aa;
+      --hero-band: #101012;
+      --private-bg: #101010;
+      --private-ink: #f5f5f5;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 16px rgba(0, 0, 0, 0.4), 0 20px 48px rgba(0, 0, 0, 0.45);
+      --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.45), 0 10px 26px rgba(0, 0, 0, 0.5), 0 30px 64px rgba(0, 0, 0, 0.55);
+      --nav-bg: rgba(0, 0, 0, 0.82);
+      --focus: rgba(255, 255, 255, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      transition: background-color 240ms ease, color 240ms ease;
+    }
+
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { font: inherit; }
+    a { color: inherit; text-decoration: none; }
+    :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+
+    .scroll-progress {
+      position: fixed;
+      z-index: 100;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      pointer-events: none;
+      background: #000000;
+      opacity: 0.5;
+      transform: scaleX(0);
+      transform-origin: left center;
+      will-change: transform;
+    }
+    html[data-theme="dark"] .scroll-progress { background: #ffffff; }
+
+    .container { width: min(1120px, calc(100% - 48px)); margin-inline: auto; }
+
+    .topbar {
+      position: sticky;
+      z-index: 30;
+      top: 0;
+      border-bottom: 1px solid var(--line);
+      background: var(--nav-bg);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+    }
+    .topbar-inner {
+      display: flex;
+      min-height: 56px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+    }
+    .brand-mark {
+      position: relative;
+      width: 26px;
+      height: 26px;
+      flex: 0 0 auto;
+      overflow: hidden;
+      border-radius: 7px;
+      background: #000000;
+    }
+    html[data-theme="dark"] .brand-mark { background: #f5f5f5; }
+    html[data-theme="dark"] .brand-mark::before,
+    html[data-theme="dark"] .brand-mark::after { background: #000000; }
+    .brand-mark::before, .brand-mark::after {
+      position: absolute;
+      content: "";
+      background: rgba(255, 255, 255, 0.92);
+      transform: rotate(-24deg);
+    }
+    .brand-mark::before { width: 17px; height: 5px; top: 6px; left: 4px; border-radius: 6px; }
+    .brand-mark::after { width: 12px; height: 5px; right: 3px; bottom: 6px; border-radius: 6px; }
+
+    .topbar-actions { display: flex; align-items: center; gap: 8px; }
+    .icon-button, .back-link {
+      display: inline-flex;
+      min-height: 36px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--ink);
+      transition: border-color 180ms ease, background-color 180ms ease;
+    }
+    .icon-button { width: 36px; padding: 0; cursor: pointer; }
+    .icon-button:hover, .back-link:hover { border-color: var(--line-strong); background: var(--surface-soft); }
+    .icon-button svg { width: 16px; height: 16px; }
+    .sun-icon { display: none; }
+    html[data-theme="dark"] .sun-icon { display: block; }
+    html[data-theme="dark"] .moon-icon { display: none; }
+    .back-link { gap: 7px; padding: 0 14px; font-size: 13px; font-weight: 600; background: var(--surface-soft); border-color: transparent; }
+    .back-link svg { width: 14px; height: 14px; }
+
+    .hero {
+      position: relative;
+      isolation: isolate;
+      padding: 64px 0 32px;
+      background: var(--hero-band);
+    }
+    .mesh {
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      overflow: hidden;
+      pointer-events: none;
+      background:
+        radial-gradient(720px 420px at 16% -4%, rgba(198, 190, 234, 0.6), rgba(198, 190, 234, 0) 70%),
+        radial-gradient(640px 400px at 84% 4%, rgba(206, 214, 238, 0.65), rgba(206, 214, 238, 0) 70%),
+        radial-gradient(920px 520px at 50% 118%, rgba(226, 224, 236, 0.75), rgba(226, 224, 236, 0) 72%);
+    }
+    html[data-theme="dark"] .mesh {
+      background:
+        radial-gradient(720px 420px at 16% -4%, rgba(88, 80, 140, 0.38), rgba(88, 80, 140, 0) 70%),
+        radial-gradient(640px 400px at 84% 4%, rgba(70, 84, 120, 0.38), rgba(70, 84, 120, 0) 70%),
+        radial-gradient(920px 520px at 50% 118%, rgba(60, 58, 80, 0.42), rgba(60, 58, 80, 0) 72%);
+    }
+    .hero::after, .hero::before { display: none; }
+    .hero-grid { display: flex; flex-direction: column; align-items: center; text-align: center; }
+
+    .hero-emblem { display: flex; justify-content: center; margin-bottom: 20px; }
+    .hero-emblem svg { width: 64px; height: 64px; filter: drop-shadow(0 8px 18px rgba(80, 70, 140, 0.22)); }
+    @media (max-width: 720px) { .hero-emblem svg { width: 56px; height: 56px; } }
+
+    .card-icon { display: grid; width: 44px; height: 44px; place-items: center; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); color: var(--ink); }
+    .card-icon svg { width: 22px; height: 22px; }
+    .integration-item .card-icon { margin-inline: auto; }
+
+    .ways, #process, .integrations, .surfaces, .private-section, #faq, .closing-cta { border-top: 1px solid var(--line); }
+
+    .demo-showcase {
+      padding: 0 0 88px;
+      background:
+        radial-gradient(920px 420px at 50% 0%, rgba(226, 224, 236, 0.55), rgba(226, 224, 236, 0) 78%),
+        var(--hero-band);
+    }
+    html[data-theme="dark"] .demo-showcase {
+      background:
+        radial-gradient(920px 420px at 50% 0%, rgba(60, 58, 80, 0.42), rgba(60, 58, 80, 0) 78%),
+        var(--hero-band);
+    }
+    .demo-showcase .container { display: flex; justify-content: center; }
+    .demo-showcase .browser { width: min(960px, 100%); transform: none; }
+
+    .hero-copy { display: flex; flex-direction: column; align-items: center; max-width: 780px; padding-top: 0; }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 7px 13px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: var(--surface);
+      color: #525252;
+      font-size: 12.5px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    html[data-theme="dark"] .eyebrow { color: #d4d4d4; }
+    .eyebrow-dot { width: 7px; height: 7px; border-radius: 50%; background: #000000; }
+    html[data-theme="dark"] .eyebrow-dot { background: #f5f5f5; }
+
+    h1 {
+      max-width: 780px;
+      margin: 0;
+      font-size: clamp(46px, 5.6vw, 72px);
+      font-weight: 700;
+      line-height: 1.05;
+      letter-spacing: -0.045em;
+    }
+    .gradient-keyword { background: none; -webkit-background-clip: unset; background-clip: unset; color: inherit; }
+    .hero-value { max-width: 620px; margin: 14px 0 0; color: var(--ink); font-size: 18px; font-weight: 500; line-height: 1.6; }
+    .hero-subtitle { max-width: 640px; margin: 18px 0 0; color: var(--muted); font-size: clamp(18px, 1.7vw, 21px); line-height: 1.65; letter-spacing: -0.01em; }
+    .hero-note { max-width: 610px; margin: 16px 0 0; color: var(--muted); font-size: 13px; line-height: 1.8; }
+    .hero-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin-top: 30px; }
+
+    .primary-button, .copy-button {
+      display: inline-flex;
+      min-height: 50px;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--primary);
+      color: var(--primary-ink);
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      transition: background-color 180ms ease, transform 180ms ease;
+    }
+    .primary-button { padding: 0 24px; }
+    .primary-button:hover, .copy-button:hover { background: var(--primary-hover); transform: translateY(-1px); }
+    .primary-button svg { width: 17px; height: 17px; }
+
+    .os-detected { display: flex; align-items: center; gap: 7px; margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+    .os-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #42d392; box-shadow: 0 0 0 3px rgba(66, 211, 146, 0.1), 0 0 10px rgba(66, 211, 146, 0.35); }
+    .os-switch-line { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+    .os-switch-line a, .topup-line a { margin-left: 4px; color: inherit; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+    .os-switch-line a:hover, .topup-line a:hover { color: var(--ink); text-decoration-color: currentColor; }
+    .topup-line { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
+    .topup-line a { font-weight: 600; }
+    .point-finger { display: inline-block; margin-right: 6px; font-size: 16px; animation: finger-blink 1.2s ease-in-out infinite; }
+    @keyframes finger-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+    @media (prefers-reduced-motion: reduce) { .point-finger { animation: none; } }
+
+    .download-cta {
+      min-width: 280px;
+      min-height: 52px;
+      border: 0;
+      border-radius: 999px;
+      box-shadow: none;
+      transition: background-color 180ms ease, transform 180ms ease;
+    }
+    .download-cta:hover { transform: translateY(-1px); filter: none; }
+    .download-cta:active { transform: translateY(0) scale(0.985); transition-duration: 80ms; }
+    .download-cta .os-icon, .download-cta .download-arrow { width: 18px; height: 18px; flex: 0 0 auto; }
+
+    /* === App selector: single Codex card in the preview === */
+    .app-selector {
+      --app-ease: cubic-bezier(0.16, 1, 0.3, 1);
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      width: min(100%, 620px);
+      margin: 0 auto 20px;
+    }
+    .app-choice {
+      position: relative;
+      min-width: 0;
+      padding: 16px 18px;
+      color: var(--ink);
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      opacity: 1;
+      transition: border-color 200ms ease, box-shadow 200ms ease, transform 200ms ease;
+    }
+    .app-choice:hover { border-color: var(--ink); transform: translateY(-1px); box-shadow: var(--shadow-hover); }
+    .app-choice:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+    .app-choice.is-selected { border-color: var(--ink); box-shadow: var(--shadow), 0 0 0 1px var(--ink); }
+    .app-choice__header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .app-choice__icon { width: 22px; height: 22px; flex-shrink: 0; display: inline-flex; align-items: center; }
+    .app-choice__icon svg { width: 100%; height: 100%; }
+    .app-icon { width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; }
+    .app-icon svg { width: 100%; height: 100%; }
+    .app-choice__name { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+    .app-choice__indicator {
+      display: grid; flex: 0 0 auto; width: 18px; height: 18px; place-items: center;
+      border: 1px solid var(--line-strong); border-radius: 50%; color: #fff;
+      font-size: 11px; font-weight: 900; line-height: 1; background: transparent;
+    }
+    .app-choice__indicator::before { content: "\2713"; opacity: 0; transform: scale(0.35); transition: transform 200ms var(--app-ease), opacity 200ms var(--app-ease); }
+    .app-choice.is-selected .app-choice__indicator { border-color: var(--ink); background: var(--ink); }
+    html[data-theme="dark"] .app-choice.is-selected .app-choice__indicator { color: #000000; }
+    .app-choice.is-selected .app-choice__indicator::before { opacity: 1; transform: scale(1); }
+    .app-choice__note { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    #osDownloadActions.app-download-exit { opacity: 0; transform: translateY(-6px); transition: transform 150ms ease-in, opacity 150ms ease-in; }
+    #osDownloadActions.app-download-enter { opacity: 0; transform: translateY(8px); }
+    #osDownloadActions.app-download-enter-active { opacity: 1; transform: translateY(0); transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1), opacity 250ms cubic-bezier(0.16, 1, 0.3, 1); }
+    @media (prefers-reduced-motion: reduce) {
+      .app-choice, .app-choice__indicator::before,
+      #osDownloadActions.app-download-exit, #osDownloadActions.app-download-enter-active { transition: none !important; }
+    }
+
+    .download-meta, .download-hint { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+    .download-hint { margin-top: 4px; }
+    .secondary-link { display: inline-flex; min-height: 48px; align-items: center; gap: 7px; padding: 0 20px; border-radius: 999px; background: var(--surface-soft); color: var(--ink); font-size: 15px; font-weight: 600; }
+    .secondary-link span { transition: transform 180ms ease; }
+    .secondary-link:hover span { transform: translateX(4px); }
+    .os-download { padding-bottom: 10px; }
+    .platform-status { display: flex; align-items: center; gap: 9px; margin-top: 20px; color: var(--muted); font-size: 12px; font-weight: 600; }
+    .status-pulse { position: relative; width: 8px; height: 8px; border-radius: 50%; background: #27a86f; }
+    .status-pulse::after { position: absolute; inset: -4px; border: 1px solid rgba(39, 168, 111, 0.36); border-radius: 50%; content: ""; animation: statusPulse 3.2s ease-out infinite; }
+    @keyframes statusPulse { 0% { opacity: 0.55; transform: scale(0.78); } 75%, 100% { opacity: 0; transform: scale(1.18); } }
+
+    .browser {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 20px;
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 12px 32px rgba(0, 0, 0, 0.08), 0 40px 90px rgba(0, 0, 0, 0.16);
+      transform: none;
+    }
+    html[data-theme="dark"] .browser { border-color: rgba(255, 255, 255, 0.16); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4), 0 16px 40px rgba(0, 0, 0, 0.5), 0 48px 100px rgba(0, 0, 0, 0.55); }
+    .browser-bar { display: flex; height: 48px; align-items: center; gap: 7px; border-bottom: 1px solid var(--line); padding: 0 17px; background: var(--surface-soft); }
+    .browser-dot { width: 9px; height: 9px; border-radius: 50%; background: #d6d8de; }
+    .browser-dot:nth-child(1) { background: #ee8d83; }
+    .browser-dot:nth-child(2) { background: #e9c36d; }
+    .browser-dot:nth-child(3) { background: #73c59b; }
+    .browser-address { width: 43%; height: 22px; margin-left: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+
+    .wizard { min-width: 0; padding: 30px 31px 34px; }
+    .wizard-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .wizard-kicker { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .wizard-title { margin: 6px 0 0; font-size: 20px; letter-spacing: -0.02em; }
+    .secure-mark { display: grid; width: 37px; height: 37px; place-items: center; border-radius: 10px; background: var(--surface-soft); color: var(--ink); }
+    .secure-mark svg { width: 19px; height: 19px; }
+    .wizard-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin: 27px 0 26px; }
+    .wizard-step { height: 4px; overflow: hidden; border-radius: 99px; background: var(--line); }
+    .wizard-step.done, .wizard-step.active { background: var(--line-strong); }
+    .wizard-step.done::after, .wizard-step.active::after { display: block; width: 100%; height: 100%; border-radius: inherit; background: var(--ink); content: ""; }
+    .wizard-step.active::after { animation: miniStep 4s ease-in-out infinite; transform-origin: left; }
+    @keyframes miniStep { 0% { transform: scaleX(0); } 75%, 100% { transform: scaleX(1); } }
+
+    .check-panel { padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); }
+    .check-row { display: flex; align-items: center; gap: 13px; }
+    .check-icon { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; border-radius: 10px; background: var(--surface); color: var(--ink); box-shadow: 0 1px 7px rgba(0, 0, 0, 0.06); }
+    .check-icon svg { width: 20px; height: 20px; }
+    .check-copy { min-width: 0; flex: 1; }
+    .check-title { margin: 0; font-size: 13px; font-weight: 700; }
+    .check-text { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+    .checking { color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 700; }
+    .fake-progress { height: 7px; margin-top: 19px; overflow: hidden; border-radius: 99px; background: var(--line); }
+    .fake-progress::after { display: block; width: 100%; height: 100%; border-radius: inherit; background: var(--ink); content: ""; animation: progress 4s ease-in-out infinite; transform-origin: left; }
+    @keyframes progress { 0% { transform: scaleX(0); } 70%, 100% { transform: scaleX(1); } }
+
+    .terminal-log { width: 100%; min-width: 0; max-width: 100%; margin-top: 18px; overflow: hidden; padding: 16px 18px; border-radius: 12px; background: #0b0b0c; color: #c8cfdf; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.9; }
+    .terminal-log-header { display: flex; min-width: 0; align-items: center; justify-content: space-between; margin-bottom: 8px; color: #8d96aa; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif; font-size: 10px; font-weight: 700; line-height: 1.4; }
+    .terminal-live { display: inline-flex; align-items: center; gap: 7px; color: #5ee6a8; font-size: 9px; letter-spacing: 0.08em; }
+    .terminal-live-dot { position: relative; width: 6px; height: 6px; border-radius: 50%; background: #5ee6a8; }
+    .terminal-live-dot::after { position: absolute; inset: -4px; border: 1px solid rgba(94, 230, 168, 0.4); border-radius: 50%; content: ""; animation: terminalPulse 3.2s ease-out infinite; }
+    @keyframes terminalPulse { 0% { opacity: 0.9; transform: scale(0.78); } 75%, 100% { opacity: 0; transform: scale(1.18); } }
+    .terminal-log-line { min-width: 0; min-height: 3.8em; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+    .terminal-command { color: #a5b4fc; }
+    .terminal-success { color: #5ee6a8; }
+    .cursor { display: inline-block; width: 8px; height: 15px; margin-left: 3px; background: #a5b4fc; vertical-align: -2px; animation: blink 0.85s steps(1) infinite; }
+    @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+    .wizard-success { display: flex; max-height: 0; align-items: center; gap: 8px; overflow: hidden; margin: 0; border-radius: 10px; background: rgba(22, 163, 74, 0.08); color: #16a34a; font-size: 13px; font-weight: 600; line-height: 1.5; opacity: 0; transform: translateY(6px); transition: max-height 400ms ease, opacity 400ms ease, transform 400ms ease, margin 400ms ease, padding 400ms ease; }
+    html[data-theme="dark"] .wizard-success { background: rgba(34, 197, 94, 0.12); color: #4ade80; }
+    .wizard-success.show { max-height: 60px; margin-top: 12px; padding: 10px 12px; opacity: 1; transform: translateY(0); }
+    .wizard-success-check { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: #16a34a; color: #ffffff; font-size: 12px; font-weight: 800; }
+    .wizard-footer { display: flex; align-items: center; justify-content: space-between; margin-top: 23px; }
+    .wizard-stage { color: var(--muted); font-size: 11px; }
+    .wizard-button { min-height: 36px; padding: 0 16px; border-radius: 999px; background: var(--primary); color: var(--primary-ink); font-size: 12px; font-weight: 650; }
+
+    section { padding: 96px 0; }
+    .section-heading { max-width: 680px; margin: 0 auto 48px; text-align: center; }
+    .section-label { margin: 0 0 14px; color: var(--muted); font-size: 12px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; }
+    .section-title { margin: 0; font-size: clamp(32px, 3.8vw, 44px); font-weight: 680; line-height: 1.15; letter-spacing: -0.03em; }
+    .section-intro { margin: 16px 0 0; color: var(--muted); font-size: 17px; line-height: 1.7; }
+
+    .process-layout { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 28px; max-width: 970px; margin: 0 auto; }
+    .progress-rail { position: relative; width: 3px; height: calc(100% - 68px); min-height: 600px; margin: 34px auto; overflow: hidden; border-radius: 99px; background: var(--line); }
+    .progress-fill { position: absolute; inset: 0 0 auto; height: 0; border-radius: inherit; background: var(--ink); box-shadow: none; }
+    .steps { display: grid; gap: 16px; }
+    .step-card { display: grid; grid-template-columns: 96px 58px minmax(0, 1fr); align-items: center; gap: 25px; min-height: 160px; padding: 30px 34px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); transition: transform 240ms ease, box-shadow 240ms ease, border-color 240ms ease; }
+    .step-card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-hover); transform: translateY(-3px); }
+    .step-number { color: #a3a3a3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 40px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.06em; }
+    html[data-theme="dark"] .step-number { color: #525252; }
+    .step-icon { display: grid; width: 52px; height: 52px; place-items: center; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); color: var(--ink); }
+    .step-icon svg { width: 25px; height: 25px; }
+    .step-card h3 { margin: 0; font-size: 20px; letter-spacing: -0.02em; }
+    .step-card p { margin: 9px 0 0; color: var(--muted); font-size: 14px; line-height: 1.75; }
+
+    .private-card { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 48px; padding: 56px 60px; border: 1px solid var(--line-strong); border-radius: 24px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow); transition: transform 240ms ease, box-shadow 240ms ease; }
+    .private-card::before { display: none; }
+    .private-card > * { position: relative; z-index: 1; }
+    .private-card h2 { margin: 0; font-size: clamp(28px, 3.3vw, 40px); line-height: 1.2; letter-spacing: -0.03em; }
+    .private-benefits { margin: 16px 0 0; color: var(--muted); font-size: 15px; line-height: 1.75; }
+    .private-action { min-width: 270px; text-align: right; }
+    .qq-number { margin: 0 0 18px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: clamp(25px, 3vw, 34px); font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: 1px; white-space: nowrap; }
+    .copy-button { min-width: 144px; padding: 0 20px; }
+    .copy-button:active { transform: scale(0.97); }
+    .copy-button svg { width: 16px; height: 16px; }
+    @media (hover: hover) and (pointer: fine) {
+      .private-card:hover { box-shadow: var(--shadow-hover); transform: translateY(-3px); }
+      .private-card .copy-button:hover { transform: translateY(-1px); }
+    }
+
+    .faq-wrap { max-width: 860px; margin: 0 auto; }
+    .faq-list { display: grid; gap: 12px; }
+    .faq-item { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); transition: border-color 200ms ease, box-shadow 200ms ease; }
+    .faq-item::before { display: none; }
+    .faq-item.open { border-color: var(--line-strong); box-shadow: var(--shadow-hover); }
+    .faq-question { display: flex; width: 100%; min-height: 72px; align-items: center; justify-content: space-between; gap: 24px; border: 0; padding: 21px 25px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+    .faq-question span:first-child { font-size: 16px; font-weight: 600; transition: font-weight 200ms ease; }
+    .faq-item.open .faq-question span:first-child { font-weight: 700; }
+    .faq-toggle { position: relative; width: 20px; height: 20px; flex: 0 0 auto; color: var(--ink); transition: transform 300ms ease, color 300ms ease; }
+    .faq-toggle::before, .faq-toggle::after { position: absolute; top: 9px; left: 4px; width: 12px; height: 1.5px; border-radius: 2px; background: currentColor; content: ""; }
+    .faq-toggle::after { transform: rotate(90deg); }
+    .faq-item.open .faq-toggle { transform: rotate(45deg); }
+    .faq-answer { display: grid; grid-template-rows: 0fr; overflow: hidden; transition: grid-template-rows 380ms cubic-bezier(0.4, 0, 0.2, 1); }
+    .faq-item.open .faq-answer { grid-template-rows: 1fr; }
+    .faq-answer p { min-height: 0; overflow: hidden; margin: 0; padding: 0 56px 23px 25px; color: var(--muted); font-size: 14px; line-height: 1.8; opacity: 0; transform: translateY(6px); transition: opacity 220ms ease, transform 220ms ease; }
+    .faq-item.open .faq-answer p { opacity: 1; transform: translateY(0); transition-delay: 80ms; }
+
+    footer { border-top: 1px solid var(--line); padding: 72px 0 48px; }
+    .footer-inner { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 32px; align-items: start; color: var(--muted); font-size: 13px; }
+    .footer-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .footer-links { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+    .footer-links a, .footer-col a { color: var(--muted); font-size: 14px; transition: color 180ms ease; }
+    .footer-links a:hover, .footer-col a:hover { color: var(--ink); }
+    .footer-sys-switch, .footer-dev-link { margin: 0; font-size: 13px; }
+    .footer-brand { color: var(--ink); font-weight: 650; }
+
+    .reveal { opacity: 0; transform: translateY(20px); transition: opacity 640ms ease-out, transform 640ms ease-out; transition-delay: var(--delay, 0ms); }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 1023px) {
+      .hero { padding-top: 80px; }
+      .hero-copy { max-width: 720px; }
+      .browser { width: min(720px, 100%); margin-inline: auto; transform: none; }
+      .demo-showcase { padding: 8px 0 72px; }
+      .private-card { padding: 48px; }
+    }
+
+    @media (max-width: 720px) {
+      .container { width: min(100% - 32px, 1120px); }
+      .topbar-inner { min-height: 56px; }
+      .brand { gap: 8px; font-size: 13px; }
+      .brand-mark { width: 23px; height: 23px; border-radius: 7px; }
+      .icon-button, .back-link { min-height: 40px; }
+      .icon-button { width: 40px; }
+      .back-link { width: 40px; padding: 0; font-size: 0; }
+      .back-link svg { width: 16px; height: 16px; }
+      .hero { padding: 64px 0 48px; }
+      h1 { font-size: clamp(42px, 12vw, 56px); line-height: 1.08; letter-spacing: -0.04em; }
+      .hero-subtitle { margin-top: 16px; font-size: 17px; line-height: 1.65; }
+      .hero-note { font-size: 12px; }
+      .hero-actions { align-items: stretch; flex-direction: column; gap: 12px; margin-top: 24px; }
+      .primary-button { width: 100%; }
+      .app-selector { grid-template-columns: 1fr; width: min(100%, 380px); }
+      .wizard { padding: 22px 18px 24px; }
+      .wizard-header { align-items: flex-start; }
+      .check-panel { padding: 16px; }
+      .checking { display: none; }
+      .terminal-log { padding: 11px 12px; font-size: 10px; }
+      section { padding: 72px 0; }
+      .section-heading { margin-bottom: 38px; }
+      .section-title { font-size: 32px; }
+      .section-intro { font-size: 15px; }
+      .process-layout { display: block; }
+      .progress-column { display: none; }
+      .steps { gap: 14px; }
+      .step-card { grid-template-columns: 58px minmax(0, 1fr); gap: 18px; min-height: 0; padding: 26px 22px; }
+      .step-number { grid-column: 1 / -1; font-size: 28px; }
+      .step-icon { width: 50px; height: 50px; }
+      .private-card { grid-template-columns: 1fr; gap: 32px; padding: 36px 26px; border-radius: 20px; }
+      .private-action { min-width: 0; text-align: left; }
+      .qq-number { white-space: normal; }
+      .copy-button { width: 100%; }
+      .faq-question { min-height: 68px; padding: 19px 20px; }
+      .faq-answer p { padding: 0 42px 21px 20px; }
+      footer { padding: 56px 0 40px; }
+      .footer-inner { grid-template-columns: 1fr; gap: 24px; }
+      .footer-links { align-items: flex-start; flex-direction: column; gap: 12px; }
+      .footer-links a, .footer-col a { display: inline-flex; min-height: 32px; align-items: center; }
+    }
+
+    @media (max-width: 390px) {
+      .container { width: calc(100% - 28px); }
+      .topbar-actions { gap: 6px; }
+      .icon-button, .back-link { width: 40px; min-height: 40px; }
+      h1 { font-size: 39px; }
+      .eyebrow { font-size: 11px; }
+      .browser-bar { height: 42px; }
+      .wizard-title { font-size: 18px; }
+      .section-title { font-size: 30px; }
+      .step-card { padding: 23px 19px; }
+      .private-card { padding: 32px 22px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; }
+      .scroll-progress { display: none; }
+      .progress-fill { height: 100% !important; box-shadow: none; }
+      .reveal { opacity: 1; transform: none; }
+      .icon-button:hover, .back-link:hover, .primary-button:hover, .copy-button:hover,
+      .secondary-link:hover span, .step-card:hover, .private-card:hover,
+      .private-card .copy-button:hover, .private-card .copy-button:active { transform: none; }
+      .wizard-step.active::after, .fake-progress::after { transform: scaleX(1); }
+      .terminal-live-dot::after { opacity: 0; transform: none; }
+      .cursor { opacity: 1; }
+    }
+
+    /* === v3: section rhythm mirrored from the reference order, own content only === */
+    .ways-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; max-width: 970px; margin: 0 auto; }
+    .way-card { padding: 30px 28px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); transition: transform 240ms ease, box-shadow 240ms ease, border-color 240ms ease; }
+    .way-card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-hover); transform: translateY(-3px); }
+    .way-tag { margin: 0 0 12px; color: var(--muted); font-size: 12px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; }
+    .way-card h3 { margin: 0; font-size: 20px; letter-spacing: -0.02em; }
+    .way-card p:last-child { margin: 9px 0 0; color: var(--muted); font-size: 14px; line-height: 1.75; }
+    .integration-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 1120px; margin: 0 auto; }
+    .integration-item { padding: 24px 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-soft); text-align: center; }
+    .integration-item h3 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
+    .integration-item p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .surface-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 1120px; margin: 0 auto; }
+    .surface-card { padding: 28px 26px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); transition: transform 240ms ease, box-shadow 240ms ease, border-color 240ms ease; }
+    .surface-card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-hover); transform: translateY(-3px); }
+    .surface-card h3 { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+    .surface-card p { margin: 9px 0 0; color: var(--muted); font-size: 14px; line-height: 1.75; }
+    .closing-cta { background: var(--hero-band); text-align: center; }
+    .closing-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
+    .closing-cta .hero-note { margin-inline: auto; }
+    .closing-cta .hero-note a { color: inherit; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+    .hero-cta-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; }
+    .qq-link { display: inline-flex; min-height: 36px; align-items: center; gap: 6px; padding: 0 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 600; transition: border-color 180ms ease, background-color 180ms ease; }
+    .qq-link:hover { border-color: var(--line-strong); background: var(--surface-soft); }
+    .footer-heading { margin: 0 0 2px; color: var(--ink); font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+    @media (min-width: 721px) {
+      .steps .step-card:nth-child(even) { grid-template-columns: minmax(0, 1fr) 58px 96px; }
+      .steps .step-card:nth-child(even) > div:last-child { order: 1; }
+      .steps .step-card:nth-child(even) .step-icon { order: 2; }
+      .steps .step-card:nth-child(even) .step-number { order: 3; text-align: right; }
+    }
+    @media (max-width: 1023px) {
+      .integration-grid, .surface-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 720px) {
+      .ways-grid, .integration-grid, .surface-grid { grid-template-columns: 1fr; }
+      .qq-link .qq-num { display: none; }
+      .closing-actions { flex-direction: column; align-items: stretch; }
+      .closing-actions .primary-button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a class="brand" href="#top" aria-label="特好装 · Codex 一键安装">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>特好装 · Codex 一键安装</span>
+      </a>
+      <div class="topbar-actions">
+        <a class="qq-link" href="tencent://message/?uin=89523844"><span>客服 QQ</span><span class="qq-num"> 89523844</span></a>
+        <button class="icon-button" id="themeToggle" type="button" aria-label="切换深色主题" title="切换主题">
+          <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <path d="M20.4 15.2A8.3 8.3 0 0 1 8.8 3.6 8.5 8.5 0 1 0 20.4 15.2Z"></path>
+          </svg>
+          <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.7"></circle>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+          </svg>
+        </button>
+        <a class="back-link" href="https://thz.quest" aria-label="返回主站">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m15 18-6-6 6-6"></path>
+          </svg>
+          <span>返回主站</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="mesh" aria-hidden="true"></div>
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <div class="hero-emblem reveal" aria-hidden="true">
+            <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+              <defs>
+                <radialGradient id="emblemGrad" cx="35%" cy="28%" r="85%">
+                  <stop offset="0%" stop-color="#efedf7"/>
+                  <stop offset="55%" stop-color="#cfc9e8"/>
+                  <stop offset="100%" stop-color="#a49dc9"/>
+                </radialGradient>
+              </defs>
+              <circle cx="32" cy="32" r="30" fill="url(#emblemGrad)"/>
+              <circle cx="32" cy="32" r="29" stroke="rgba(255,255,255,0.75)" stroke-width="1"/>
+              <circle cx="32" cy="32" r="22.5" stroke="rgba(255,255,255,0.45)" stroke-width="1"/>
+              <path d="M22 26.5 29 32l-7 5.5M33.5 38.5H42" stroke="#23233a" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="eyebrow reveal">
+            <span class="eyebrow-dot"></span>
+            <span>免费安装 · Windows 已支持</span>
+          </div>
+          <h1 class="reveal" style="--delay: 80ms">把 Codex 装进你的电脑，<span class="gradient-keyword">不用碰命令行</span>。</h1>
+          <p class="hero-subtitle reveal" style="--delay: 160ms">安装程序自动检查环境，一步步带你完成安装，全程不用输入命令。</p>
+          <div id="osDownload" class="os-download reveal" style="--delay: 240ms; margin-top: 24px;">
+            <div id="appSelector" class="app-selector" role="radiogroup" aria-label="选择要安装的 Codex 版本">
+              <button type="button" class="app-choice is-selected" data-app="codex-desktop" role="radio" aria-checked="true">
+                <span class="app-choice__header">
+                  <span class="app-choice__icon" aria-hidden="true"><svg fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="桌面集成版"><rect x="3" y="4" width="18" height="12" rx="2.5" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 20h5M12 16v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span class="app-choice__name">Codex</span>
+                  <span class="app-choice__indicator" aria-hidden="true"></span>
+                </span>
+                <small class="app-choice__note">桌面集成版：桌面应用，内含 Codex</small>
+              </button>
+              <button type="button" class="app-choice" data-app="codex" role="radio" aria-checked="false">
+                <span class="app-choice__header">
+                  <span class="app-choice__icon" aria-hidden="true"><svg fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Codex"><rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M7 9.5 10 12l-3 2.5M12.5 14.5H17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="app-choice__name">Codex</span>
+                  <span class="app-choice__indicator" aria-hidden="true"></span>
+                </span>
+                <small class="app-choice__note">终端版，适合开发者</small>
+              </button>
+              
+              
+              
+            </div>
+            <div id="osDownloadActions" aria-live="polite"></div>
+            <div class="hero-cta-row reveal" style="--delay: 320ms">
+              <a class="secondary-link" href="#process">四步怎么装<span aria-hidden="true">→</span></a>
+            </div>
+            <p class="hero-note reveal" style="--delay: 360ms">安装器免费，安装过程不用翻墙。装好之后能不能正常使用，取决于你自己的网络环境。</p>
+            <p class="os-switch-line"><a href="#" id="osSwitchHero">其他系统</a></p>
+            <p class="topup-line">装好了？<span class="point-finger" aria-hidden="true">👉</span><a href="https://wzyp.cn/shop/thz">AI会员代充，Chat Plus ¥125 起</a></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="demo-showcase">
+      <div class="container">
+<div class="browser reveal" style="--delay: 160ms" aria-label="安装向导界面预览">
+          <div class="browser-bar">
+            <span class="browser-dot"></span>
+            <span class="browser-dot"></span>
+            <span class="browser-dot"></span>
+            <span class="browser-address"></span>
+          </div>
+          <div class="wizard">
+            <div class="wizard-header">
+              <div>
+                <div class="wizard-kicker">特好装 Installer</div>
+                <h2 class="wizard-title">Codex 安装向导</h2>
+              </div>
+              <div class="secure-mark">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 3 5 6v5c0 4.7 2.9 8 7 10 4.1-2 7-5.3 7-10V6l-7-3Z"></path>
+                  <path d="m9.5 12 1.7 1.7 3.7-4"></path>
+                </svg>
+              </div>
+            </div>
+
+            <div class="wizard-steps" aria-label="四步安装进度">
+              <span class="wizard-step done"></span>
+              <span class="wizard-step active"></span>
+              <span class="wizard-step"></span>
+              <span class="wizard-step"></span>
+            </div>
+
+            <div class="check-panel">
+              <div class="check-row">
+                <div class="check-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9"></circle>
+                    <path d="M3 12h18M12 3c2.4 2.5 3.7 5.5 3.7 9S14.4 18.5 12 21M12 3c-2.4 2.5-3.7 5.5-3.7 9s1.3 6.5 3.7 9"></path>
+                  </svg>
+                </div>
+                <div class="check-copy">
+                  <p class="check-title">正在检查安装环境</p>
+                  <p class="check-text">确认所需资源是否可以正常访问</p>
+                </div>
+                <span class="checking">CHECKING</span>
+              </div>
+              <div class="fake-progress" aria-hidden="true"></div>
+            </div>
+
+            <div class="terminal-log" aria-label="安装日志">
+              <div class="terminal-log-header">
+                <span>安装日志</span>
+                <span class="terminal-live"><span class="terminal-live-dot" aria-hidden="true"></span>LIVE</span>
+              </div>
+              <div class="terminal-log-line" id="tlog1"></div>
+              <div class="terminal-log-line" id="tlog2"></div>
+              <div class="terminal-log-line" id="tlog3"></div>
+            </div>
+
+            <div class="wizard-success" id="wizardSuccess" aria-hidden="true"><span class="wizard-success-check">✓</span><span>Codex 安装完成 · 现在可以开始使用 AI 编程助手</span></div>
+
+            <div class="wizard-footer">
+              <span class="wizard-stage">第 1 步，共 4 步</span>
+              <span class="wizard-button">继续</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="ways" aria-label="三种开始方式">
+      <div class="container">
+        <div class="section-heading reveal">
+          <p class="section-label">Ways to start</p>
+          <h2 class="section-title">先装好，再选一种使用方式</h2>
+          <p class="section-intro">安装器本身免费。装好之后，用你自己的账号或 Key 开始使用。</p>
+        </div>
+        <div class="ways-grid">
+          <article class="way-card reveal">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/></svg></div>
+            <p class="way-tag">第 1 步</p>
+            <h3>免费安装</h3>
+            <p>下载安装器，跟随四步向导完成安装，不用输入命令。</p>
+          </article>
+          <article class="way-card reveal" style="--delay: 80ms">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.2-3.2 3.8-4.8 7-4.8s5.8 1.6 7 4.8"/></svg></div>
+            <p class="way-tag">账号登录</p>
+            <h3>ChatGPT 账号</h3>
+            <p>用你自己的 ChatGPT 账号登录，就能开始用 Codex。</p>
+          </article>
+          <article class="way-card reveal" style="--delay: 160ms">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.6"/><path d="M11.6 12H21M17.5 12v3.2M20.5 12v2.2"/></svg></div>
+            <p class="way-tag">Key 路线</p>
+            <h3>DeepSeek API Key</h3>
+            <p>也可以配 DeepSeek API Key，成本更低，Key 只保存在你自己的电脑上。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="process">
+      <div class="container">
+        <div class="section-heading reveal">
+          <p class="section-label">Installation flow</p>
+          <h2 class="section-title">四步完成安装，过程清楚可控</h2>
+          <p class="section-intro">从环境检查到下载安装，安装程序会在每一步给出明确指引，全程约 3 分钟，不需要输入命令。</p>
+        </div>
+
+        <div class="process-layout" id="processTrack">
+          <div class="progress-column" aria-hidden="true">
+            <div class="progress-rail">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+          </div>
+
+          <div class="steps">
+            <article class="step-card reveal" style="--delay: 0ms">
+              <div class="step-number">01</div>
+              <div class="step-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9"></circle>
+                  <path d="M3 12h18M12 3c2.3 2.4 3.6 5.5 3.6 9S14.3 18.6 12 21M12 3C9.7 5.4 8.4 8.5 8.4 12s1.3 6.6 3.6 9"></path>
+                </svg>
+              </div>
+              <div>
+                <h3>检查安装环境</h3>
+                <p>先确认当前网络是否可以访问 Codex 安装所需资源</p>
+              </div>
+            </article>
+
+            <article class="step-card reveal" style="--delay: 80ms">
+              <div class="step-number">02</div>
+              <div class="step-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="13" rx="2"></rect>
+                  <path d="M8 21h8M12 17v4"></path>
+                </svg>
+              </div>
+              <div>
+                <h3>选择电脑系统</h3>
+                <p>目前支持 Windows，macOS 已支持</p>
+              </div>
+            </article>
+
+            <article class="step-card reveal" style="--delay: 160ms">
+              <div class="step-number">03</div>
+              <div class="step-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path>
+                  <circle cx="16" cy="7" r="2"></circle>
+                  <circle cx="8" cy="17" r="2"></circle>
+                </svg>
+              </div>
+              <div>
+                <h3>选择版本和 AI</h3>
+                <p>选择 Codex 版本和 AI 使用方式，安装程序会带你完成配置</p>
+              </div>
+            </article>
+
+            <article class="step-card reveal" style="--delay: 240ms">
+              <div class="step-number">04</div>
+              <div class="step-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 3v12"></path>
+                  <path d="m7 10 5 5 5-5"></path>
+                  <path d="M5 20h14"></path>
+                </svg>
+              </div>
+              <div>
+                <h3>下载安装</h3>
+                <p>下载 Windows 安装程序，双击后跟随向导完成</p>
+              </div>
+            </article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="integrations" aria-label="适用的系统与登录方式">
+      <div class="container">
+        <div class="section-heading reveal">
+          <p class="section-label">Works with</p>
+          <h2 class="section-title">装在你的电脑上，用你的账号登录</h2>
+        </div>
+        <div class="integration-grid">
+          <div class="integration-item reveal">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 12h17M12 3.5v17"/></svg></div>
+            <h3>Windows</h3>
+            <p>64 位 Windows 10 / 11</p>
+          </div>
+          <div class="integration-item reveal" style="--delay: 80ms">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2.5 19h19"/></svg></div>
+            <h3>macOS</h3>
+            <p>macOS 12 及以上</p>
+          </div>
+          <div class="integration-item reveal" style="--delay: 160ms">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12" rx="3"/><path d="M8.5 20.5 12 16.5"/><path d="M8 10.5h.01M12 10.5h.01M16 10.5h.01"/></svg></div>
+            <h3>ChatGPT 账号</h3>
+            <p>邮箱、Google、微软账号登录</p>
+          </div>
+          <div class="integration-item reveal" style="--delay: 240ms">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="3.6"/><path d="M11.6 12H21M17.5 12v3.2M20.5 12v2.2"/></svg></div>
+            <h3>DeepSeek Key</h3>
+            <p>开放平台申请的 API Key</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="surfaces" aria-label="安装覆盖的场景">
+      <div class="container">
+        <div class="section-heading reveal">
+          <p class="section-label">Where it installs</p>
+          <h2 class="section-title">一台电脑，装好就能用</h2>
+        </div>
+        <div class="surface-grid">
+          <article class="surface-card reveal">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+            <h3>Windows 电脑</h3>
+            <p>下载 Windows 安装程序，双击后跟随向导完成。</p>
+          </article>
+          <article class="surface-card reveal" style="--delay: 80ms">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2.5 19h19"/></svg></div>
+            <h3>Mac 电脑</h3>
+            <p>macOS 版本已上线，同样四步完成安装。</p>
+          </article>
+          <article class="surface-card reveal" style="--delay: 160ms">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9.5 10 12l-3 2.5M12.5 14.5H17"/></svg></div>
+            <h3>终端</h3>
+            <p>Codex 是终端版工具，装好后在终端里运行，帮你写代码、改代码、解释代码。</p>
+          </article>
+          <article class="surface-card reveal" style="--delay: 240ms">
+            <div class="card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.7 2.9 8 7 10 4.1-2 7-5.3 7-10V6l-7-3Z"/><path d="m9.5 12 1.7 1.7 3.7-4"/></svg></div>
+            <h3>安装向导</h3>
+            <p>向导先检查安装环境，确认资源可以正常访问，再开始下载安装。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="private-section">
+      <div class="container">
+        <div class="private-card reveal">
+          <div>
+            <h2>安装完成后，还可以领取省钱配置方案</h2>
+            <p class="private-benefits">包括 Codex 配置、模型选择、AI 工具省钱技巧</p>
+          </div>
+          <div class="private-action">
+            <p class="qq-number">QQ：89523844</p>
+            <button class="copy-button" id="copyQQ" type="button" data-number="89523844">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+                <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+              </svg>
+              <span id="copyLabel">复制 QQ 号</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq">
+      <div class="container faq-wrap">
+        <div class="section-heading reveal">
+          <p class="section-label">FAQ</p>
+          <h2 class="section-title">安装前，你可能想知道</h2>
+        </div>
+
+        <div class="faq-list">
+          <article class="faq-item reveal" style="--delay: 0ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-1">
+              <span>需要命令行基础吗？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-1">
+              <p>不需要。安装程序自动检查环境、一步步带你完成，全程不用输入命令。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 80ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-2">
+              <span>安装要花钱吗？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-2">
+              <p>安装器本身免费。使用 AI 功能需要你自己的 ChatGPT 账号或 DeepSeek API Key。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 160ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-3">
+              <span>支持 macOS 吗？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-3">
+              <p>Windows 已支持，macOS 版本已上线。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 240ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-4">
+              <span>安装失败怎么办？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-4">
+              <p>页面有重试和失败兜底，也可以直接联系客服 QQ 89523844。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 320ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-5">
+              <span>Codex 是什么？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-5">
+              <p>Codex 是 OpenAI 推出的 AI 编程助手，能帮你写代码、改代码、解释代码。装好之后，用你的 ChatGPT 账号登录就能开始用。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 400ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-6">
+              <span>为什么不用官方安装？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-6">
+              <p>官方安装要在命令行里手动操作，对新手不友好。这个安装器自动检查环境、一步步带你完成，全程不用碰命令行。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 480ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-7">
+              <span>是否需要 ChatGPT Plus？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-7">
+              <p>不一定。登录你自己的 ChatGPT 账号就能用 Codex；也可以选择 DeepSeek API Key 的路线，成本更低。安装时按向导选择即可。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 560ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-8">
+              <span>安装安全吗？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-8">
+              <p>安全。安装器只做环境检查和下载，不收集你的账号密码；安装包来自官方渠道，安装过程每一步都看得见。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 640ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-9">
+              <span>Windows 支持哪些版本？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-9">
+              <p>支持 64 位的 Windows 10 和 Windows 11。</p>
+            </div>
+          </article>
+          <article class="faq-item reveal" style="--delay: 720ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-10">
+              <span>Codex 终端版是什么样的？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-10">
+              <p><strong>Codex 终端版</strong>：没有聊天窗口，是在黑框框（终端）里敲命令用的工具，主要是给程序员、开发者用的。装好之后在终端里运行，就能让它帮你写代码、改代码、解释代码。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 800ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-11">
+              <span>装好之后怎么用？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-11">
+              <p>在终端里输入命令运行 Codex，用你的 OpenAI 账号登录（或按向导配好 DeepSeek API Key）就能开始用。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 880ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-12">
+              <span>怎么配置 DeepSeek Key？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-12">
+              <p>安装器装完之后，会弹出来问你要不要配置 DeepSeek Key：</p>
+              <p>1. 如果你有 DeepSeek 的 API Key（以 sk- 开头的一串字符），点"是"，把 Key 粘贴进去，配置成功会自动关闭。</p>
+              <p>2. 如果你没有 Key，点"否"跳过就行，不影响使用。</p>
+              <p>Key 只保存在你自己的电脑上，不会上传到任何地方。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 960ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-13">
+              <span>怎么登录账号？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-13">
+              <p><strong>ChatGPT</strong>：用 OpenAI 账号登录，支持邮箱、Google 账号、微软账号三种方式。注意：国内邮箱（比如 163、QQ 邮箱）可能收不到验证邮件，建议用 Gmail 注册和登录。</p>
+              <p><strong>DeepSeek</strong>：不需要"登录"，只需要在 DeepSeek 开放平台申请一个 API Key，然后在安装器里配好就行。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 1040ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-14">
+              <span>使用环境有什么要求？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-14">
+              <p>电脑系统：Windows 10 / 11（64 位），macOS 12 及以上。</p>
+              <p>网络：日常使用 Codex 需要你自己能访问 OpenAI。安装器只解决"下载安装"这一步，装好之后能不能正常使用，取决于你自己的网络环境。</p>
+            </div>
+          </article>
+
+          <article class="faq-item reveal" style="--delay: 1120ms">
+            <button class="faq-question" type="button" aria-expanded="false" aria-controls="faq-a-15">
+              <span>为什么网络环境不对，也能下载成功？</span>
+              <span class="faq-toggle" aria-hidden="true"></span>
+            </button>
+            <div class="faq-answer" id="faq-a-15">
+              <p>因为安装器里面自带了一个下载通道，专门解决国内下载不了国外软件的问题。所以就算你平时打不开 OpenAI 官网，安装器也能把软件下载下来。</p>
+              <p>但要注意：<strong>下载成功不等于能直接用</strong>。安装器只解决"装不上"的问题，日常使用 Codex 还是需要你自己解决网络问题。</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+    <section class="closing-cta" aria-label="开始安装">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="section-title">现在就把 Codex 装好</h2>
+          <p class="section-intro">免费安装，约 3 分钟，不用输入命令。</p>
+        </div>
+        <div class="closing-actions reveal">
+          <a class="primary-button" href="#osDownload">去下载安装器</a>
+          <a class="secondary-link" href="#faq">先看看常见问题<span aria-hidden="true">→</span></a>
+        </div>
+        <p class="hero-note reveal">装好了？<a href="https://wzyp.cn/shop/thz">AI会员代充，Chat Plus ¥125 起</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-inner">
+      <div class="footer-col"><span class="footer-brand"><span>特好装 Installer v61</span></span><a href="https://thz.quest">← 返回主站 thz.quest</a></div>
+      <div class="footer-col footer-links"><p class="footer-heading">安装</p><a href="#process">四步安装流程</a><a href="#faq">常见问题</a><a href="#osDownload">下载安装器</a></div>
+      <div class="footer-col footer-links"><p class="footer-heading">联系与购买</p><a href="tencent://message/?uin=89523844">联系客服</a><a href="https://wzyp.cn/shop/thz">链动小铺</a></div>
+      <div class="footer-col"><p class="footer-heading">系统</p><p class="footer-sys-switch"><a href="#" id="osSwitchFooter">切换系统：Windows / macOS</a></p><p class="footer-dev-link" style="text-align:center;margin-top:6px;font-size:12px;opacity:.6"><a href="#" id="codexDevLink" style="color:inherit;text-decoration:underline">开发者？点这里下载 Codex 终端版 →</a></p></div>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      const root = document.documentElement;
+      const params = new URLSearchParams(window.location.search);
+      const forcedTheme = params.get("theme");
+      const savedTheme = localStorage.getItem("thz-theme");
+      const initialTheme = forcedTheme === "dark" || forcedTheme === "light"
+        ? forcedTheme
+        : (savedTheme === "dark" || savedTheme === "light" ? savedTheme : "light");
+
+      root.setAttribute("data-theme", initialTheme);
+
+      const themeToggle = document.getElementById("themeToggle");
+
+      function updateThemeLabel() {
+        const dark = root.getAttribute("data-theme") === "dark";
+        themeToggle.setAttribute("aria-label", dark ? "切换浅色主题" : "切换深色主题");
+      }
+
+      updateThemeLabel();
+
+      themeToggle.addEventListener("click", function () {
+        const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        root.setAttribute("data-theme", next);
+        localStorage.setItem("thz-theme", next);
+        updateThemeLabel();
+      });
+
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const revealItems = document.querySelectorAll(".reveal");
+
+      if (reducedMotion || !("IntersectionObserver" in window)) {
+        revealItems.forEach(function (item) {
+          item.classList.add("visible");
+        });
+      } else {
+        const revealObserver = new IntersectionObserver(function (entries, observer) {
+          entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add("visible");
+              observer.unobserve(entry.target);
+            }
+          });
+        }, {
+          threshold: 0.13,
+          rootMargin: "0px 0px -45px"
+        });
+
+        revealItems.forEach(function (item) {
+          revealObserver.observe(item);
+        });
+      }
+
+      const terminalLines = [
+        {
+          element: document.getElementById("tlog1"),
+          command: "$ thz-codex-setup --check",
+          result: "✓ 网络环境正常"
+        },
+        {
+          element: document.getElementById("tlog2"),
+          command: "$ thz-codex-setup --install",
+          result: "✓ Codex 已安装"
+        },
+        {
+          element: document.getElementById("tlog3"),
+          command: '$ codex "hello"',
+          result: "✓ 运行正常"
+        }
+      ];
+      const wizardSteps = document.querySelectorAll(".wizard-step");
+      const wizardSuccess = document.getElementById("wizardSuccess");
+      const wizardStage = document.querySelector(".wizard-stage");
+
+      function wait(duration) {
+        return new Promise(function (resolve) {
+          window.setTimeout(resolve, duration);
+        });
+      }
+
+      function resetWizardSteps() {
+        wizardSteps.forEach(function (step, index) {
+          step.classList.toggle("done", index === 0);
+          step.classList.toggle("active", index === 1);
+        });
+      }
+
+      function completeWizardStep() {
+        const activeStep = document.querySelector(".wizard-step.active");
+
+        if (!activeStep) return;
+
+        const nextStep = activeStep.nextElementSibling;
+        activeStep.classList.remove("active");
+        activeStep.classList.add("done");
+
+        if (nextStep && nextStep.classList.contains("wizard-step")) {
+          nextStep.classList.add("active");
+        }
+      }
+
+      function createTerminalSpan(className) {
+        const span = document.createElement("span");
+        span.className = className;
+        return span;
+      }
+
+      async function typeText(element, text) {
+        for (const character of text) {
+          element.textContent += character;
+          await wait(34 + Math.floor(Math.random() * 27));
+        }
+      }
+
+      function showStaticTerminal() {
+        terminalLines.forEach(function (line, index) {
+          const command = createTerminalSpan("terminal-command");
+          const result = createTerminalSpan("terminal-success");
+          command.textContent = line.command;
+          result.textContent = line.result;
+          line.element.replaceChildren(command, document.createElement("br"), result);
+
+          if (index === terminalLines.length - 1) {
+            const cursor = document.createElement("span");
+            cursor.className = "cursor";
+            cursor.setAttribute("aria-hidden", "true");
+            line.element.appendChild(cursor);
+          }
+        });
+
+        wizardSteps.forEach(function (step) {
+          step.classList.remove("active");
+          step.classList.add("done");
+        });
+        wizardSuccess.classList.add("show");
+        wizardStage.textContent = "✓ 安装完成";
+      }
+
+      async function playTerminal() {
+        while (true) {
+          terminalLines.forEach(function (line) {
+            line.element.replaceChildren();
+          });
+          wizardSuccess.classList.remove("show");
+          wizardStage.textContent = "第 1 步，共 4 步";
+          resetWizardSteps();
+
+          for (let index = 0; index < terminalLines.length; index += 1) {
+            const line = terminalLines[index];
+            const command = createTerminalSpan("terminal-command");
+            const result = createTerminalSpan("terminal-success");
+            line.element.appendChild(command);
+            await typeText(command, line.command);
+            await wait(200);
+            line.element.appendChild(document.createElement("br"));
+            line.element.appendChild(result);
+            await typeText(result, line.result);
+
+            if (index === terminalLines.length - 1) {
+              const cursor = document.createElement("span");
+              cursor.className = "cursor";
+              cursor.setAttribute("aria-hidden", "true");
+              line.element.appendChild(cursor);
+            }
+
+            completeWizardStep();
+            await wait(420);
+          }
+
+          wizardSuccess.classList.add("show");
+          wizardStage.textContent = "✓ 安装完成";
+          await wait(2200);
+        }
+      }
+
+      if (reducedMotion) {
+        showStaticTerminal();
+      } else {
+        playTerminal();
+      }
+
+      const processTrack = document.getElementById("processTrack");
+      const progressFill = document.getElementById("progressFill");
+      let ticking = false;
+
+      function updateProcessProgress() {
+        if (!processTrack || !progressFill) return;
+        const rect = processTrack.getBoundingClientRect();
+        const viewport = window.innerHeight;
+        const start = viewport * 0.72;
+        const end = viewport * 0.24;
+        const distance = rect.height + start - end;
+        const traveled = start - rect.top;
+        const progress = Math.max(0, Math.min(1, traveled / distance));
+        progressFill.style.height = (progress * 100).toFixed(2) + "%";
+        ticking = false;
+      }
+
+      function requestProgressUpdate() {
+        if (!ticking) {
+          window.requestAnimationFrame(updateProcessProgress);
+          ticking = true;
+        }
+      }
+
+      window.addEventListener("scroll", requestProgressUpdate, { passive: true });
+      window.addEventListener("resize", requestProgressUpdate);
+      updateProcessProgress();
+
+      const scrollProgress = document.getElementById("scrollProgress");
+      let scrollProgressTicking = false;
+
+      function updateScrollProgress() {
+        const scrollTop = window.scrollY || document.documentElement.scrollTop;
+        const scrollRange = document.documentElement.scrollHeight - window.innerHeight;
+        const progress = scrollRange > 0 ? Math.max(0, Math.min(1, scrollTop / scrollRange)) : 0;
+        scrollProgress.style.transform = "scaleX(" + progress.toFixed(4) + ")";
+        scrollProgressTicking = false;
+      }
+
+      function requestScrollProgressUpdate() {
+        if (!scrollProgressTicking) {
+          window.requestAnimationFrame(updateScrollProgress);
+          scrollProgressTicking = true;
+        }
+      }
+
+      if (!reducedMotion) {
+        window.addEventListener("scroll", requestScrollProgressUpdate, { passive: true });
+        window.addEventListener("resize", requestScrollProgressUpdate);
+        updateScrollProgress();
+      }
+
+      document.querySelectorAll(".faq-question").forEach(function (button) {
+        button.addEventListener("click", function () {
+          const item = button.closest(".faq-item");
+          const isOpen = item.classList.contains("open");
+
+          document.querySelectorAll(".faq-item.open").forEach(function (openItem) {
+            if (openItem !== item) {
+              openItem.classList.remove("open");
+              openItem.querySelector(".faq-question").setAttribute("aria-expanded", "false");
+            }
+          });
+
+          item.classList.toggle("open", !isOpen);
+          button.setAttribute("aria-expanded", String(!isOpen));
+        });
+      });
+
+      const copyButton = document.getElementById("copyQQ");
+      const copyLabel = document.getElementById("copyLabel");
+      let copyTimer;
+
+      async function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+
+        const input = document.createElement("textarea");
+        input.value = text;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        input.remove();
+      }
+
+      copyButton.addEventListener("click", async function () {
+        try {
+          await copyText(copyButton.dataset.number);
+          copyLabel.textContent = "已复制 ✓";
+          clearTimeout(copyTimer);
+          copyTimer = setTimeout(function () {
+            copyLabel.textContent = "复制 QQ 号";
+          }, 2200);
+        } catch (error) {
+          copyLabel.textContent = "复制失败，请手动复制";
+          clearTimeout(copyTimer);
+          copyTimer = setTimeout(function () {
+            copyLabel.textContent = "复制 QQ 号";
+          }, 2400);
+        }
+      });
+    })();
+  </script>
+<script>
+(function () {
+  function detectOS() {
+    var ua = navigator.userAgent || '';
+    var plat = navigator.platform || '';
+    if (/Mac/.test(plat) || /Macintosh/.test(ua)) return 'macos';
+    if (/Win/.test(plat) || /Windows/.test(ua)) return 'windows';
+    return 'unknown';
+  }
+  var APPS = {
+    'codex-desktop': {
+      winLabel: '下载 Codex 桌面版（Windows）',
+      macLabel: '下载 Codex 桌面版（Mac）',
+      win: '/api/installer/download-chatgpt-win',
+      mac: '/api/installer/download-chatgpt-mac'
+    },
+    codex: {
+      winLabel: '下载 Codex 终端版（Windows）',
+      macLabel: '下载 Codex 终端版（Mac）',
+      win: '/api/installer/download-win',
+      mac: '/api/installer/download-mac'
+    }
+  };
+  var currentOS = detectOS();
+  var currentApp = 'codex-desktop';
+  var swapToken = 0;
+  var actions = document.getElementById('osDownloadActions');
+  if (!actions) return;
+  var APP_ICONS = {
+    'codex-desktop': '<svg fill=\"none\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"桌面集成版\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"12\" rx=\"2.5\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M9.5 20h5M12 16v4\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg>',
+    codex: '<svg fill=\"none\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"Codex\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M7 9.5 10 12l-3 2.5M12.5 14.5H17\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>',
+  };
+  function downloadButton(href, label, osType, appKey) {
+    var isWindows = osType === 'windows';
+    var appIcon = '<span class="app-icon" aria-hidden="true">' + (APP_ICONS[appKey] || APP_ICONS.codex) + '</span>';
+    var osIcon = isWindows
+      ? '<svg class="os-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 4.6 10.7 3.5v7.8H3V4.6Zm8.7-1.2L21 2v9.3h-9.3V3.4ZM3 12.3h7.7v7.8L3 19v-6.7Zm8.7 0H21v9.3l-9.3-1.3v-8Z"/></svg>'
+      : '<svg class="os-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9H4V6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M2.5 18.5h19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+    var arrow = '<svg class="download-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    return '<a class="primary-button download-cta" href="' + href + '">' + appIcon + osIcon + '<span>' + label + '</span>' + arrow + '</a>'
+      ;
+  }
+  function buttonHTML(os) {
+    var cfg = APPS[currentApp] || APPS['codex-desktop'];
+    if (os === 'macos') {
+      return downloadButton(cfg.mac, cfg.macLabel, 'macos', currentApp);
+    }
+    if (os === 'windows') {
+      return downloadButton(cfg.win, cfg.winLabel, 'windows', currentApp);
+    }
+    if (cfg.mac == null) {
+      return downloadButton(cfg.win, cfg.winLabel, 'windows', currentApp);
+    }
+    return downloadButton(cfg.win, cfg.winLabel, 'windows', currentApp) +
+      downloadButton(cfg.mac, cfg.macLabel, 'macos', currentApp);
+  }
+  function renderDownload(os, animate) {
+    var html = buttonHTML(os);
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!animate || reduceMotion || !actions.firstChild) {
+      actions.classList.remove('app-download-exit', 'app-download-enter', 'app-download-enter-active');
+      actions.innerHTML = html;
+      return;
+    }
+    var my = ++swapToken;
+    actions.classList.remove('app-download-enter', 'app-download-enter-active');
+    actions.classList.add('app-download-exit');
+    setTimeout(function () {
+      if (my !== swapToken) return;
+      actions.innerHTML = html;
+      actions.classList.remove('app-download-exit');
+      actions.classList.add('app-download-enter');
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (my !== swapToken) return;
+          actions.classList.remove('app-download-enter');
+          actions.classList.add('app-download-enter-active');
+          setTimeout(function () {
+            if (my !== swapToken) return;
+            actions.classList.remove('app-download-enter-active');
+          }, 300);
+        });
+      });
+    }, 150);
+  }
+  function updateCards() {
+    var cards = document.querySelectorAll('#appSelector [data-app]');
+    for (var i = 0; i < cards.length; i++) {
+      var sel = cards[i].getAttribute('data-app') === currentApp;
+      cards[i].classList.toggle('is-selected', sel);
+      cards[i].setAttribute('aria-checked', sel ? 'true' : 'false');
+      cards[i].tabIndex = sel ? 0 : -1;
+    }
+  }
+  function setApp(app) {
+    if (!APPS[app] || currentApp === app) return;
+    currentApp = app;
+    updateCards();
+    renderDownload(currentOS, true);
+  }
+  function toggleOS(event) {
+    event.preventDefault();
+    currentOS = currentOS === 'windows' ? 'macos' : 'windows';
+    renderDownload(currentOS, true);
+  }
+  var cards = document.querySelectorAll('#appSelector [data-app]');
+  for (var i = 0; i < cards.length; i++) {
+    (function (card) {
+      card.addEventListener('click', function () { setApp(card.getAttribute('data-app')); });
+      card.addEventListener('keydown', function (e) {
+        // Two-edition selector: arrow keys move between editions.
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          var keys = Object.keys(APPS);
+          var idx = keys.indexOf(currentApp);
+          var next = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? idx - 1 : idx + 1;
+          var target = keys[(next + keys.length) % keys.length];
+          setApp(target);
+          var targetCard = document.querySelector('#appSelector [data-app="' + target + '"]');
+          if (targetCard && targetCard.focus) targetCard.focus();
+        }
+      });
+    })(cards[i]);
+  }
+  var footerSwitch = document.getElementById('osSwitchFooter');
+  if (footerSwitch) footerSwitch.addEventListener('click', toggleOS);
+  var codexDevLink = document.getElementById('codexDevLink');
+  if (codexDevLink) codexDevLink.addEventListener('click', function (event) {
+    event.preventDefault();
+    setApp('codex');
+    var target = document.getElementById('osDownload');
+    if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  var heroSwitch = document.getElementById('osSwitchHero');
+  if (heroSwitch) heroSwitch.addEventListener('click', toggleOS);
+  window.setApp = setApp;
+  updateCards();
+  renderDownload(currentOS, false);
+})();
+</script>
+
+<script>
+/* PREVIEW ONLY v2 (staging file): Codex-only. The download script above
+   was trimmed to the single Codex app; this shim keeps Codex selected.
+   No routes or download logic were altered. */
+(function () { if (typeof window.setApp === "function") { window.setApp("codex-desktop"); } })();
+</script>
+</body>
+<!-- POLISH61:
+1. 在 Hero 标题与副标题之间新增克制的价值说明，并按指定字号、颜色、行高、间距和字重呈现。
+2. 在安装日志后新增成功结果态，完成动画和 reduced-motion 静态模式都会显示成功提示并更新阶段文案，循环重启时复位。
+3. 保持主 CTA 指向安装流程，将次 CTA 改为指向 FAQ 的“常见问题”路径。
+4. 仅在 720px 以下按指定数值收紧 Hero 留白、网格间距、正文和按钮间距、终端尺寸及渐变高度。
+5. QQ 私域卡片仅更新标题和价值说明文案，QQ 号码、复制按钮、结构与样式类保持不变。
+6. 四步流程介绍补充约 3 分钟完成且无需输入命令的说明。
+7. FAQ 从 4 条扩充到 9 条，为全部问答补齐连续 id 与 aria-controls，并按 80ms 步进设置新增条目的 reveal 延迟。
+8. 在 390px 以下将 h1 字号由 41px 调整为 39px。
+9. 将浅色与深色 Hero 顶部渐变的饱和度分别降至 70% 和 63%。
+10. 将滚动进度条透明度设为 0.75，放慢并弱化终端与平台状态脉冲，同时保持 reduced-motion 全静止。
+11. 页脚版本号由 v60 更新为 v61。
+-->
+</html>

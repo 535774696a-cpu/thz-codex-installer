@@ -1,0 +1,112 @@
+name: Preview v6 render check
+
+# One-off check of the v6 installer-site preview on real macOS + Windows
+# runners. Checks the preview file only — no production changes, no merges,
+# no full file downloads (the multi-run download standard applies to
+# installer releases; these endpoints are unchanged production routes).
+on:
+  workflow_dispatch:
+
+jobs:
+  render-check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: preview/v6-render-check
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Playwright and Chromium
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw"
+          cd "$RUNNER_TEMP/pw"
+          npm init -y >/dev/null 2>&1
+          npm install playwright
+          npx playwright install chromium
+
+      - name: Serve preview directory
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE/preview"
+          python -m http.server 8901 >/tmp/preview-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8901/codex-redesign-v6.html; then break; fi
+            sleep 1
+          done
+          curl -fsS -o /dev/null -w "preview server HTTP %{http_code}\n" http://127.0.0.1:8901/codex-redesign-v6.html
+
+      - name: Run Playwright check
+        shell: bash
+        run: |
+          cp "$GITHUB_WORKSPACE/preview/check-v6.mjs" "$RUNNER_TEMP/pw/check-v6.mjs"
+          cd "$RUNNER_TEMP/pw"
+          mkdir -p "$GITHUB_WORKSPACE/preview/out"
+          node check-v6.mjs "http://127.0.0.1:8901/codex-redesign-v6.html" "$GITHUB_WORKSPACE/preview/out"
+
+      - name: Upload screenshots and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v6-check-${{ runner.os }}
+          path: preview/out/
+          retention-days: 7
+
+  endpoint-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check download endpoint headers
+        shell: bash
+        run: |
+          out="$(mktemp)"
+          {
+            echo "## Download endpoint header check"
+            echo ""
+            echo "| endpoint | method | status | content-length | content-disposition |"
+            echo "|---|---|---|---|---|"
+          } > "$out"
+          fail=0
+          for p in download-win download-mac download-chatgpt-win download-chatgpt-mac; do
+            url="https://codex.thz.quest/api/installer/$p"
+            headers="$(curl -sS -o /dev/null -D - -I --max-time 30 "$url" || true)"
+            status="$(printf '%s' "$headers" | grep -i '^HTTP/' | tail -1 | awk '{print $2}')"
+            method="HEAD"
+            if [ "$status" != "200" ] && [ "$status" != "206" ]; then
+              # HEAD rejected: fall back to a 1 KiB range GET. --max-filesize
+              # guards against a server ignoring the range and sending the
+              # whole file (the Mac dmg is ~751MB); headers are captured
+              # before the body either way.
+              headers="$(curl -sS -o /dev/null -D - --max-time 30 --max-filesize 4096 -H 'Range: bytes=0-1023' "$url" || true)"
+              status="$(printf '%s' "$headers" | grep -i '^HTTP/' | tail -1 | awk '{print $2}')"
+              method="GET range"
+            fi
+            len="$(printf '%s' "$headers" | grep -i '^content-length:' | tail -1 | tr -d '\r' | cut -d' ' -f2-)"
+            disp="$(printf '%s' "$headers" | grep -i '^content-disposition:' | tail -1 | tr -d '\r' | cut -d' ' -f2-)"
+            printf '| %s | %s | %s | %s | %s |\n' "$p" "$method" "${status:-<none>}" "${len:-<empty>}" "${disp:-<none>}" >> "$out"
+            case "$status" in 200|206) ;; *) fail=1;; esac
+            if [ -z "$len" ] || [ "$len" = "0" ]; then fail=1; fi
+          done
+          if [ "$fail" = 1 ]; then
+            echo "" >> "$out"
+            echo "RESULT: FAIL" >> "$out"
+          else
+            echo "" >> "$out"
+            echo "RESULT: PASS" >> "$out"
+          fi
+          cat "$out" >> "$GITHUB_STEP_SUMMARY"
+          cat "$out"
+          [ "$fail" = 0 ]
