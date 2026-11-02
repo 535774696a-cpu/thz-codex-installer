@@ -19,18 +19,9 @@ EXITING=0
 BACKUP_DIR=""
 CONFIG_PATH="$CODEX_HOME/config.toml"
 MODELS_PATH="$CODEX_HOME/models.json"
-API_KEY=""
 START_RESPONSE=""
 DEVICE_FINGERPRINT=""
-CI_KEY_STDIN=0
-CLI_KEY=""
-CLI_KEY_FILE=""
-CLI_KEY_B64=""
 MODE=""
-MODEL="deepseek-chat"
-PROVIDER_ID="deepseek"
-PROVIDER_BASE_URL="https://api.deepseek.com"
-MODELS_JSON='{"models":[{"slug":"deepseek-chat","display_name":"DeepSeek Chat","description":"DeepSeek Chat","default_reasoning_level":"high","supported_reasoning_levels":[{"effort":"high","description":"High reasoning effort"}],"shell_type":"shell_command","visibility":"list","minimal_client_version":"0.0.0","supported_in_api":true,"priority":1}]}'
 
 touch "$LOG_TMP" 2>/dev/null || {
     printf '%s\n' "无法创建临时安装日志：$LOG_TMP"
@@ -40,7 +31,7 @@ chmod 600 "$LOG_TMP" 2>/dev/null || true
 exec > >(tee -a "$LOG_TMP") 2>&1
 
 write_step() {
-    printf '\n[%s/7] %s\n' "$1" "$2"
+    printf '\n[%s/6] %s\n' "$1" "$2"
 }
 
 write_ok() {
@@ -209,25 +200,6 @@ json_get_bool() {
         head -n 1
 }
 
-json_get_models_value() {
-    json_input="$1"
-    # models_json 是转义后的嵌套 JSON 字符串，sed 正则 [^"]* 会在 \" 处提前截断。
-    # 优先用 python3 做真正的 JSON 解析，拿不到再回退到原来的 sed 方法。
-    if command -v python3 >/dev/null 2>&1; then
-        py_models="$(printf '%s' "$json_input" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d.get("models_json",""); print(v if isinstance(v,str) else "")' 2>/dev/null)"
-        if [ -n "$py_models" ]; then
-            printf '%s' "$py_models"
-            return
-        fi
-    fi
-    encoded="$(json_get_string "$json_input" "models_json")"
-    if [ -n "$encoded" ]; then
-        printf '%s' "$encoded"
-        return
-    fi
-    printf '%s' "$MODELS_JSON"
-}
-
 get_device_fingerprint() {
     raw_uuid="$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null |
         sed -n 's/.*"IOPlatformUUID"[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' |
@@ -340,7 +312,7 @@ check_system() {
 }
 
 # 安装器内置临时代理（仅用于安装时的下载）
-# 服务器：64.83.26.242:18888，白名单模式（只允许 openai/deepseek/github）
+# 服务器：64.83.26.242:18888，白名单模式（下载域名白名单）
 THZ_INSTALL_PROXY="http://64.83.26.242:18888"
 USE_INSTALL_PROXY=0
 
@@ -465,10 +437,10 @@ setup_install_proxy() {
     done
 
     if [ -n "$need_proxy_domains" ]; then
-        if [ "$CI_KEY_STDIN" != "1" ]; then
+        if [ -t 0 ] && [ "${GITHUB_ACTIONS:-}" != "true" ] && [ "${CI_SKIP_KEY_INPUT:-0}" != "1" ]; then
             printf '\n%s\n' "检测到以下域名不可直接访问：$need_proxy_domains"
             printf '%s' "将使用临时下载通道（仅本次安装，不修改系统设置），是否继续？(Y/n)："
-            IFS= read -r _confirm </dev/tty || _confirm="y"
+            IFS= read -r _confirm || _confirm="y"
             case "$_confirm" in
                 n|N|no|NO) fail_exit 2 "STEP2_CANCEL" "用户取消安装。" ;;
             esac
@@ -819,200 +791,6 @@ install_codex_cli() {
     export PATH
 }
 
-read_deepseek_key_gui() {
-    command -v osascript >/dev/null 2>&1 || return 1
-
-    key_result="$(osascript 2>/dev/null <<'APPLESCRIPT'
-try
-    display dialog "请输入你的 DeepSeek API Key\n\nKey 只在当前电脑处理，不会上传安装服务器。" default answer "" with hidden answer buttons {"取消", "确认"} default button "确认" cancel button "取消" with title "Codex AI 安装器"
-    return text returned of result
-on error number -128
-    return "__CANCEL__"
-on error
-    return "__GUI_ERROR__"
-end try
-APPLESCRIPT
-)"
-    case "$key_result" in
-        "__GUI_ERROR__") return 1 ;;
-        "__CANCEL__")
-            printf '%s' "__CANCEL__"
-            return 0
-            ;;
-        *)
-            printf '%s' "$key_result"
-            return 0
-            ;;
-    esac
-}
-
-read_deepseek_key_terminal() {
-    printf '%s' "请输入 DeepSeek API Key（输入内容不会显示）：" >/dev/tty
-    IFS= read -r -s terminal_key </dev/tty || return 1
-    printf '\n' >/dev/tty
-    printf '%s' "$terminal_key"
-}
-
-read_deepseek_key_ci_stdin() {
-    # read 在遇到 EOF 无换行时会返回非零，但 ci_key 已有内容；此时不应丢弃。
-    IFS= read -r ci_key || [ -n "$ci_key" ] || return 1
-    [ -n "$ci_key" ] || return 1
-    printf '%s' "$ci_key"
-}
-
-read_deepseek_key_once() {
-    # 优先级 0：CI_MOCK_MODE（CI 测试专用，installer 内部生成 mock Key）
-    # 背景：GitHub Actions 会拦截任何 sk- 开头的值（即使是 mock），无法从外部传入。
-    # 改用文件存在性标志（空文件，不含 Secret，GH 不拦截），installer 内部生成 mock Key。
-    # 完整测试安装流程（配置写入、校验、7 步骤），不依赖外部 Secret。
-    if [ -f "${RUNNER_TEMP:-/tmp}/thz-ci-mock-mode" ] || [ "${CI_MOCK_MODE:-0}" = "1" ]; then
-        entered_key="sk-ci-mock-test-key-12345678901234567890"
-        write_warn "CI 模式：使用内部 mock Key（mock 标志已设置）。"
-    # 优先级 1：THZ_DEEPSEEK_KEY 环境变量（GitHub Actions 标准方式，最可靠）
-    # 背景：env var 是 GH 传递 Secret 的标准通道，不会被剥离（仅在日志中打码）。
-    # 之前此检查被埋在 CI_KEY_STDIN 分支内，而 [ ! -t 0 ] 在 CI 中恒为真导致永远走不到，今移至最优先。
-    elif [ -n "${THZ_DEEPSEEK_KEY:-}" ]; then
-        entered_key="$THZ_DEEPSEEK_KEY"
-        # 立即清除环境变量，减少内存残留窗口
-        unset THZ_DEEPSEEK_KEY
-        write_warn "CI 模式：从环境变量读取到 API Key。"
-    # 优先级 2：--key-b64 从 base64 编码的参数读 Key
-    # 背景：GitHub Actions 会拦截含 Secret 明文的参数/文件写入，base64 编码后绕过字符串匹配检测。
-    # installer 解码后立即清除，日志中只记录长度。
-    elif [ -n "${CLI_KEY_B64:-}" ]; then
-        entered_key="$(printf '%s' "$CLI_KEY_B64" | base64 -d 2>/dev/null || true)"
-        CLI_KEY_B64=""
-        write_warn "CI 模式：从 base64 编码参数读取到 API Key。"
-    # 优先级 2：--key-file 从文件读 Key（文件路径不含 Secret 不会被 GH 剥离）
-    elif [ -n "${CLI_KEY_FILE:-}" ] && [ -f "$CLI_KEY_FILE" ]; then
-        entered_key="$(cat "$CLI_KEY_FILE" 2>/dev/null || true)"
-        # 安全删除：立即销毁密钥文件
-        shred -u "$CLI_KEY_FILE" 2>/dev/null || rm -P "$CLI_KEY_FILE" 2>/dev/null || rm -f "$CLI_KEY_FILE" 2>/dev/null || true
-        CLI_KEY_FILE=""
-        write_warn "CI 模式：从密钥文件读取到 API Key（文件已安全删除）。"
-    # 优先级 2：约定文件位置（CI workflow 将 Key 写入固定路径，无需参数传递）
-    # 背景：GitHub Actions 会剥离含 Secret 的命令行参数，stdin 管道也不可靠，
-    # 改用固定路径文件，installer 自动检测。
-    elif [ -f "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" ]; then
-        entered_key="$(cat "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" 2>/dev/null || true)"
-        shred -u "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" 2>/dev/null || rm -P "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" 2>/dev/null || rm -f "${RUNNER_TEMP:-/tmp}/thz-ci-deepseek-key" 2>/dev/null || true
-        write_warn "CI 模式：从约定文件位置读取到 API Key（文件已安全删除）。"
-    # 优先级 3：命令行 --key 参数（注意 GH 会剥离含 Secret 的参数，不可靠，仅作备用）
-    elif [ -n "${CLI_KEY:-}" ]; then
-        entered_key="$CLI_KEY"
-        CLI_KEY=""
-        write_warn "CI 模式：从命令行参数读取到 API Key。"
-    # 优先级 3：CI 自动检测：如果 stdin 不是 tty（被管道重定向），直接从 stdin 读 Key
-    elif [ ! -t 0 ]; then
-        entered_key="$(read_deepseek_key_ci_stdin)" || {
-            write_warn "CI 模式：未能从 stdin 读取到 API Key。"
-            return 1
-        }
-        write_warn "CI 模式：从 stdin 管道读取到 API Key。"
-    elif [ "$CI_KEY_STDIN" -eq 1 ]; then
-        # 优先从密钥文件读取（CI 环境变量传递不可靠时的兜底，文件读取后立即安全删除）
-        if [ -n "${THZ_KEY_FILE:-}" ] && [ -f "$THZ_KEY_FILE" ]; then
-            entered_key="$(cat "$THZ_KEY_FILE" 2>/dev/null || true)"
-            # 安全删除：优先 shred，macOS 用 rm -P，最后保底 rm -f
-            shred -u "$THZ_KEY_FILE" 2>/dev/null || rm -P "$THZ_KEY_FILE" 2>/dev/null || rm -f "$THZ_KEY_FILE" 2>/dev/null || true
-            unset THZ_KEY_FILE
-            write_warn "CI 模式：从密钥文件读取到 API Key（文件已安全删除）。"
-        elif [ -n "${THZ_DEEPSEEK_KEY:-}" ]; then
-            entered_key="$THZ_DEEPSEEK_KEY"
-            write_warn "CI 模式：从环境变量读取到 API Key。"
-        else
-            entered_key="$(read_deepseek_key_ci_stdin)" || {
-                write_warn "CI 模式：未能从 stdin 读取到 API Key。"
-                return 1
-            }
-        fi
-    else
-        entered_key="$(read_deepseek_key_gui)"
-        gui_status=$?
-
-        if [ "$gui_status" -ne 0 ]; then
-            write_warn "原生输入窗口不可用，改用终端隐藏输入。"
-            entered_key="$(read_deepseek_key_terminal)" ||
-                return 1
-        fi
-    fi
-
-    if [ "$entered_key" = "__CANCEL__" ]; then
-        return 2
-    fi
-
-    entered_key="$(trim_text "$entered_key")"
-    if [ "${#entered_key}" -lt 12 ]; then
-        write_warn "API Key 输入可能不完整，当前长度：${#entered_key}"
-        return 3
-    fi
-
-    key_tail="$(printf '%s' "$entered_key" | rev | cut -c1-4 | rev)"
-    write_ok "API Key 已收到，长度：${#entered_key}"
-    # 安全：CI 日志中不输出 Key 末尾（曾泄露真 Key 片段）；仅交互模式显示
-    if [ "$CI_KEY_STDIN" -ne 1 ]; then
-        write_ok "Key 末尾：****${key_tail}"
-    fi
-    API_KEY="$entered_key"
-    entered_key=""
-    return 0
-}
-
-# 格式校验：只检查 Key 格式是否合理，不调在线 API。
-# 在线验证已跳过（CI 环境曾出现 401 误报）；用户首次实际调用 DeepSeek API 时自然会验证。
-validate_deepseek_key_format() {
-    case "$API_KEY" in
-        sk-????????????????????*)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-validate_deepseek_key() {
-    key_response="${TMP_BASE%/}/thz-deepseek-key-${STAMP}-$$.json"
-
-    # 使用简单直接的 curl 命令（与诊断验证一致），避免 -K 配置文件解析问题
-    http_code="$(curl -s -m 20 -o "$key_response" -w '%{http_code}' \
-        --connect-timeout 10 \
-        -H "Authorization: Bearer $API_KEY" \
-        -H "Accept: application/json" \
-        "https://api.deepseek.com/v1/models" 2>/dev/null || echo '000')"
-    curl_status=$?
-
-    if [ "$curl_status" -ne 0 ] || [ "$http_code" = "000" ] || [ -z "$http_code" ]; then
-        rm -f "$key_response" 2>/dev/null || true
-        return 10
-    fi
-
-    case "$http_code" in
-        2??)
-            rm -f "$key_response" 2>/dev/null || true
-            return 0
-            ;;
-        401)
-            rm -f "$key_response" 2>/dev/null || true
-            return 11
-            ;;
-        403)
-            rm -f "$key_response" 2>/dev/null || true
-            return 12
-            ;;
-        402|429)
-            rm -f "$key_response" 2>/dev/null || true
-            return 13
-            ;;
-        *)
-            safe_error="$(sed -E 's/sk-[A-Za-z0-9_.\-]{4,}/sk-****/g' "$key_response" 2>/dev/null | head -c 200)"
-            rm -f "$key_response" 2>/dev/null || true
-            [ -n "$safe_error" ] && write_warn "DeepSeek API 返回 HTTP $http_code：$safe_error"
-            return 14
-            ;;
-    esac
-}
-
 backup_config() {
     backup_stamp="$(date '+%Y%m%d-%H%M%S')"
     BACKUP_DIR="$CODEX_HOME/backups/$backup_stamp"
@@ -1043,156 +821,6 @@ restore_backup() {
     fi
 }
 
-toml_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
-write_deepseek_config() {
-    config_tmp="$CONFIG_PATH.deepseek-tmp.$$"
-    models_tmp="$MODELS_PATH.deepseek-tmp.$$"
-    preserved_tmp="${TMP_BASE%/}/thz-config-preserved-${STAMP}-$$.txt"
-
-    printf '%s\n' "$MODELS_JSON" > "$models_tmp" || return 1
-    grep -F "\"slug\"" "$models_tmp" >/dev/null 2>&1 || {
-        rm -f "$models_tmp" 2>/dev/null || true
-        return 1
-    }
-    grep -F "$MODEL" "$models_tmp" >/dev/null 2>&1 || {
-        rm -f "$models_tmp" 2>/dev/null || true
-        return 1
-    }
-
-    if [ -f "$CONFIG_PATH" ]; then
-        awk -v provider="$PROVIDER_ID" '
-            BEGIN { skip=0; section=0 }
-            /^[[:space:]]*\[/ {
-                section=1
-                line=$0
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-                skip=(line == "[model_providers." provider "]")
-                if (!skip) print
-                next
-            }
-            skip { next }
-            section==0 {
-                line=$0
-                sub(/^[[:space:]]*/, "", line)
-                if (line ~ /^(model|model_provider|preferred_auth_method|forced_login_method|model_reasoning_effort|model_catalog_json)[[:space:]]*=/) next
-            }
-            { print }
-        ' "$CONFIG_PATH" > "$preserved_tmp" || return 1
-    else
-        : > "$preserved_tmp"
-    fi
-
-    {
-        printf 'model = "%s"\n' "$(toml_escape "$MODEL")"
-        printf 'model_provider = "%s"\n' "$(toml_escape "$PROVIDER_ID")"
-        printf '%s\n' 'preferred_auth_method = "apikey"'
-        printf '%s\n' 'forced_login_method = "api"'
-        printf '%s\n' 'model_reasoning_effort = "high"'
-        printf 'model_catalog_json = "%s"\n' "$(toml_escape "$MODELS_PATH")"
-        printf '\n'
-        sed -E 's/sk-[A-Za-z0-9_.\-]{4,}/sk-****/g' "$preserved_tmp"
-        printf '\n[model_providers.%s]\n' "$PROVIDER_ID"
-        printf 'name = "%s"\n' "$(toml_escape "$PROVIDER_ID")"
-        printf 'base_url = "%s"\n' "$(toml_escape "$PROVIDER_BASE_URL")"
-        printf '%s\n' 'wire_api = "responses"'
-        printf 'experimental_bearer_token = "%s"\n' "$(toml_escape "$API_KEY")"
-    } > "$config_tmp" || {
-        rm -f "$config_tmp" "$models_tmp" "$preserved_tmp" 2>/dev/null || true
-        return 1
-    }
-
-    chmod 600 "$config_tmp" "$models_tmp" 2>/dev/null || true
-    mv "$models_tmp" "$MODELS_PATH" &&
-        mv "$config_tmp" "$CONFIG_PATH"
-    move_status=$?
-    rm -f "$preserved_tmp" 2>/dev/null || true
-    return "$move_status"
-}
-
-verify_written_config() {
-    [ -s "$CONFIG_PATH" ] || return 1
-    [ -s "$MODELS_PATH" ] || return 1
-    grep -F "[model_providers.$PROVIDER_ID]" "$CONFIG_PATH" >/dev/null 2>&1 || return 1
-    grep -F "base_url = \"$PROVIDER_BASE_URL\"" "$CONFIG_PATH" >/dev/null 2>&1 || return 1
-    grep -F "$MODEL" "$MODELS_PATH" >/dev/null 2>&1 || return 1
-    return 0
-}
-
-setup_deepseek_key() {
-    # CI 专用：GitHub Actions 环境自动使用 mock Key（无需外部传递）
-    # 背景：GitHub Actions 拦截所有外部 Key/标志传递方式（stdin/env/arg/文件）。
-    # 但 GH 自动设置 GITHUB_ACTIONS=true（非 Secret，不被拦截），installer 据此自动进入 mock 模式。
-    # 跳过输入但保留完整断言：格式校验、配置写入、写后校验，确保 Step 5 核心逻辑被测试。
-    if [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${CI_SKIP_KEY_INPUT:-0}" = "1" ]; then
-        write_warn "CI 模式：检测到 GitHub Actions 环境，使用内部 mock Key（跳过输入环节）。"
-        API_KEY="sk-ci-mock-test-key-12345678901234567890"
-    else
-        attempt=1
-        while [ "$attempt" -le 3 ]; do
-            [ "$attempt" -eq 1 ] || write_warn "第 $attempt 次输入（最多 3 次）"
-
-            read_deepseek_key_once
-            read_status=$?
-            case "$read_status" in
-                0) ;;
-                2) fail_exit 5 "STEP5_CANCEL" "用户取消输入，安装已安全退出。" ;;
-                3)
-                    attempt=$((attempt + 1))
-                    continue
-                    ;;
-                *) fail_exit 5 "STEP5_INPUT" "无法读取 API Key。" ;;
-            esac
-
-            # 只做格式校验，不调在线 API（在线验证曾因环境问题误报 401）
-            if validate_deepseek_key_format; then
-                write_ok "DeepSeek Key 格式校验通过（sk- 开头，长度 ${#API_KEY}）"
-                write_warn "提示：Key 有效性将在首次实际调用 DeepSeek API 时验证"
-                break
-            else
-                write_warn "Key 格式不正确（应为 sk- 开头的长字符串）。"
-            fi
-
-            API_KEY=""
-            if [ "$attempt" -lt 3 ] && [ "$CI_KEY_STDIN" -ne 1 ]; then
-                printf '%s' "是否重新输入 Key？(y=重输 / n=退出)：" >/dev/tty
-                IFS= read -r retry_answer </dev/tty || retry_answer="n"
-                case "$retry_answer" in
-                    y|Y|yes|YES) ;;
-                    *) fail_exit 5 "STEP5_KEY" "已退出：API Key 验证失败。" ;;
-                esac
-            fi
-            attempt=$((attempt + 1))
-        done
-    fi
-
-    # 格式校验（CI mock 模式下验证 mock Key 格式）
-    if [ "${GITHUB_ACTIONS:-}" = "true" ] || [ "${CI_SKIP_KEY_INPUT:-0}" = "1" ]; then
-        if ! validate_deepseek_key_format; then
-            fail_exit 5 "STEP5_KEY" "Mock Key 格式校验失败（内部错误）。"
-        fi
-        write_ok "DeepSeek Key 格式校验通过（sk- 开头，长度 ${#API_KEY}）"
-    fi
-
-    if [ -z "$API_KEY" ]; then
-        fail_exit 5 "STEP5_KEY" "API Key 验证失败次数过多，已安全退出。"
-    fi
-
-    backup_config ||
-        fail_exit 5 "STEP5_BACKUP" "无法备份现有 Codex 配置。"
-
-    if ! write_deepseek_config || ! verify_written_config; then
-        restore_backup
-        API_KEY=""
-        fail_exit 5 "STEP5_WRITE" "DeepSeek 配置写入或写后校验失败，已恢复原配置。"
-    fi
-
-    API_KEY=""
-    write_ok "AI 模型配置完成：$MODEL"
-}
-
 verify_codex() {
     if ! probe_codex_path "$CODEX_BIN" 25; then
         [ -n "$BACKUP_DIR" ] && restore_backup
@@ -1205,39 +833,12 @@ printf '\n%s\n' '========================================'
 printf '%s\n' '  Codex AI 一键安装器（macOS）'
 printf '%s\n' '========================================'
 
-# CI 专用：--ci-key-stdin 时从 stdin 读 Key（无 GUI、无 tty 的 runner 用）
-# --key "xxx"：直接通过命令行参数传 Key（注意：GitHub Actions 会剥离含 Secret 的参数，此方式不可靠）
-# --key-file /path：从文件读 Key（推荐，文件路径不含 Secret，不会被剥离；读取后安全删除）
-_prev_arg=""
+# --ci-key-stdin is a compatibility no-op; DeepSeek key input moved to the standalone configurator.
 for script_arg in "$@"; do
     case "$script_arg" in
-        --ci-key-stdin) CI_KEY_STDIN=1 ;;
-        --key)
-            _prev_arg="--key"
-            ;;
-        --key-file)
-            _prev_arg="--key-file"
-            ;;
-        --key-b64)
-            _prev_arg="--key-b64"
-            ;;
-        *)
-            if [ "$_prev_arg" = "--key" ]; then
-                CLI_KEY="$script_arg"
-                _prev_arg=""
-            elif [ "$_prev_arg" = "--key-file" ]; then
-                CLI_KEY_FILE="$script_arg"
-                _prev_arg=""
-            elif [ "$_prev_arg" = "--key-b64" ]; then
-                CLI_KEY_B64="$script_arg"
-                _prev_arg=""
-            fi
-            ;;
+        --ci-key-stdin) : ;;
     esac
 done
-unset _prev_arg
-write_warn "STARTUP: CI_KEY_STDIN=${CI_KEY_STDIN}, args=$#, key_b64=$([ -n "$CLI_KEY_B64" ] && echo "provided(len=${#CLI_KEY_B64})" || echo "empty"), mock_mode=${CI_MOCK_MODE:-0}"
-write_warn "STARTUP: ps_args=$(ps -p $$ -o args= 2>/dev/null | head -c 200 || echo 'ps-failed')"
 
 if printf '%s' "$BASE_URL" | grep -q 'BASE_URL'; then
     fail_exit 1 "STEP1_CONFIG" "安装包配置不完整（缺少服务器地址），请重新下载。"
@@ -1257,20 +858,20 @@ MODE="$(json_get_string "$START_RESPONSE" "mode")"
 route="$(json_get_string "$START_RESPONSE" "route")"
 
 case "$MODE" in
-    deepseek)
-        write_ok "安装模式：DeepSeek API（本机配置自己的 Key）"
+    deepseek) # Preserve the server mode; provider setup moved to the standalone configurator.
+        write_ok "安装模式：Codex CLI"
         ;;
     chatgpt)
         case "$route" in
-            A) route_label="Route A：DeepSeek + Codex CLI" ;;
-            B) route_label="Route B：DeepSeek + Codex CLI（不依赖 OpenAI 网络）" ;;
+            A) route_label="Route A：Codex CLI" ;;
+            B) route_label="Route B：Codex CLI（不依赖 OpenAI 网络）" ;;
             C) route_label="Route C：ChatGPT / Codex 会员（官方 Desktop App）" ;;
-            D) route_label="Route D：Mac DeepSeek + Codex CLI" ;;
+            D) route_label="Route D：Mac Codex CLI" ;;
             E) route_label="Route E：Mac 官方 Desktop 引导" ;;
             *) route_label="Route ${route:-E}" ;;
         esac
         write_ok "安装路线：$route_label"
-        printf '\n%s\n' "Mac 版 ChatGPT 会员模式（官方 Desktop App 引导）即将上线，当前版本仅支持 DeepSeek 模式。"
+        printf '\n%s\n' "Mac 版 ChatGPT 会员模式（官方 Desktop App 引导）即将上线，当前版本仅支持 CLI 安装模式。"
         printf '%s\n' "如需帮助，请联系客服 QQ 89523844"
         finalize
         printf '\n安装日志已保存：%s\n' "$LOG_FINAL"
@@ -1283,47 +884,36 @@ case "$MODE" in
 esac
 
 case "$route" in
-    A) route_label="Route A：DeepSeek + Codex CLI" ;;
-    B) route_label="Route B：DeepSeek + Codex CLI（不依赖 OpenAI 网络）" ;;
+    A) route_label="Route A：Codex CLI" ;;
+    B) route_label="Route B：Codex CLI（不依赖 OpenAI 网络）" ;;
     C) route_label="Route C：ChatGPT / Codex 会员（官方 Desktop App）" ;;
-    D) route_label="Route D：Mac DeepSeek + Codex CLI" ;;
+    D) route_label="Route D：Mac Codex CLI" ;;
     E) route_label="Route E：Mac 官方 Desktop 引导" ;;
-    "") route_label="Route D：Mac DeepSeek + Codex CLI" ;;
+    "") route_label="Route D：Mac Codex CLI" ;;
     *) route_label="Route $route" ;;
 esac
 write_ok "安装路线：$route_label"
 
-server_model="$(json_get_string "$START_RESPONSE" "model")"
-server_provider_id="$(json_get_string "$START_RESPONSE" "provider_id")"
-server_provider_base="$(json_get_string "$START_RESPONSE" "provider_base_url")"
-[ -n "$server_model" ] && MODEL="$server_model"
-[ -n "$server_provider_id" ] && PROVIDER_ID="$server_provider_id"
-[ -n "$server_provider_base" ] && PROVIDER_BASE_URL="$server_provider_base"
-MODELS_JSON="$(json_get_models_value "$START_RESPONSE")"
 START_RESPONSE=""
 
 write_step 2 "检查系统和网络..."
 check_system
 # 先检测是否需要临时代理
 setup_install_proxy || write_warn "网络检测：直连与临时代理均不可用，后续下载可能失败"
-# check_deepseek_network 已删除：安装器不再检测 DeepSeek 连通性
 
 write_step 3 "安装或复用 Codex CLI..."
 install_codex_cli
 
-write_step 4 "准备 DeepSeek 配置目录..."
+write_step 4 "准备 Codex 配置目录..."
 mkdir -p "$CODEX_HOME" ||
     fail_exit 4 "STEP4_CONFDIR" "无法创建配置目录：$CODEX_HOME"
 chmod 700 "$CODEX_HOME" 2>/dev/null || true
 write_ok "配置目录已准备：$CODEX_HOME"
 
-write_step 5 "配置 DeepSeek（本机输入自己的 Key）..."
-setup_deepseek_key
-
-write_step 6 "验证 Codex..."
+write_step 5 "验证 Codex..."
 verify_codex
 
-write_step 7 "完成..."
+write_step 6 "完成..."
 api_complete
 
 printf '\n%s\n' '================================'
@@ -1332,16 +922,34 @@ clear_install_proxy
 
 printf '%s\n' 'Codex AI 安装完成'
 printf '%s\n' 'Codex CLI      ✓'
-printf '%s\n' 'AI 模型        DeepSeek ✓'
 printf '%s\n' '================================'
-printf '\n%s\n' '【重要提醒】'
-printf '%s\n' 'Codex 需要外网访问 api.deepseek.com 才能正常使用。'
-printf '%s\n' '安装时的临时下载代理已关闭，请自行解决网络问题后再使用。'
 printf '\n%s\n' '现在可以运行：'
 printf '%s\n' '  ~/.local/bin/codex'
 printf '%s\n' '若当前终端尚未包含 ~/.local/bin，请重新打开终端，或执行：'
 printf '%s\n' '  export PATH="$HOME/.local/bin:$PATH"'
 printf '\n安装器版本 %s，脚本结束。\n' "$INSTALLER_VERSION"
+
+post_install_text='Codex 已安装完成。
+
+如需配置 DeepSeek 模型，请运行单独的 DeepSeek 配置器，输入你自己的 API Key（Key 只保存在你自己的电脑上）。
+
+AI 会员代充站：https://wzyp.cn/shop/thz
+客服 QQ：89523844'
+if [ -t 0 ] && [ "${GITHUB_ACTIONS:-}" != "true" ] &&
+   [ "${CI_SKIP_KEY_INPUT:-0}" != "1" ] && command -v osascript >/dev/null 2>&1; then
+    dialog_result="$(osascript - "$post_install_text" 2>/dev/null <<'APPLESCRIPT'
+on run argv
+    display dialog (item 1 of argv) buttons {"打开代充站", "关闭"} default button "关闭"
+    return button returned of result
+end run
+APPLESCRIPT
+)" || printf '%s\n' "$post_install_text"
+    if [ "$dialog_result" = "打开代充站" ]; then
+        open https://wzyp.cn/shop/thz
+    fi
+else
+    printf '%s\n' "$post_install_text"
+fi
 
 finalize
 printf '安装日志已保存：%s\n' "$LOG_FINAL"

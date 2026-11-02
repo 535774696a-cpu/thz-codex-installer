@@ -35,6 +35,8 @@ jobs:
 
           shellcheck --shell=bash --severity=warning mac-installer/install-macos.sh
           bash -n mac-installer/install-macos.sh
+          shellcheck --shell=bash --severity=warning mac-installer/configure-deepseek.sh
+          bash -n mac-installer/configure-deepseek.sh
 
           first_line="$(head -n 1 mac-installer/install-macos.sh)"
           test "$first_line" = '#!/bin/bash'
@@ -202,21 +204,13 @@ jobs:
           done
           echo "Test C passed $ITERATIONS iteration(s)."
 
-      # 测试 D：真 DeepSeek Key 成功路径（Route D），验证完整 7 步安装。
-      # 每个 matrix OS 跑 1 次；Key 经 stdin 注入，不得落盘明文、不得进日志。
-      - name: Test real DeepSeek key success path
+      # 测试 D：Route D 无 Key 安装，每个 matrix OS 跑 1 次。
+      - name: Test install without key
         shell: bash
-        env:
-          STAGING_DEEPSEEK_KEY: ${{ secrets.STAGING_DEEPSEEK_KEY }}
         run: |
           set -eo pipefail
           installer_status=0
-          if [ -z "${STAGING_DEEPSEEK_KEY:-}" ]; then
-            echo "缺少 STAGING_DEEPSEEK_KEY，fail-fast。"
-            exit 1
-          fi
-
-          echo "=== Test D: DeepSeek key success path (mock key, format validation) ==="
+          echo "=== Test D: install without key ==="
           work_dir="${RUNNER_TEMP}/thz-test-real-key"
           rm -rf "$work_dir"
           mkdir -p "$work_dir"
@@ -256,14 +250,6 @@ jobs:
           echo "--- end diagnostic ---"
 
           set +e
-          # 注意：本步骤不引用 STAGING_DEEPSEEK_KEY（GitHub 会因此锁定整个步骤的 env 传递）。
-          # CI 使用 installer 内部 mock Key（CI_MOCK_MODE=1），完整测试安装流程。
-          # Secret 有效性校验已移至独立步骤（不运行 installer）。
-          # Key 处理：installer 自动检测 GITHUB_ACTIONS=true，使用内部 mock Key
-          # 背景：GitHub Actions 拦截所有外部 Key/标志传递方式。
-          # GH 自动设置 GITHUB_ACTIONS=true（非 Secret，不被拦截），installer 据此自动进入 mock 模式。
-          # 跳过输入但保留完整断言：格式校验、配置写入、写后校验。
-          # 本步骤不引用任何 Secret，GH 不会锁定 env 传递。
           /bin/bash "$work_dir/install-macos.sh" >"$output_file" 2>&1
 
           installer_status=$?
@@ -271,24 +257,42 @@ jobs:
           echo "DEBUG installer_status len: ${#installer_status}"
           set -e
 
-          # mock Key 不是 Secret，无需泄露检查
-          # 清理残留（installer 正常情况下已删除，异常退出时兜底）
-          rm -f "$work_dir/.dsk" 2>/dev/null || true
-
           if [ "$installer_status" -ne 0 ]; then
-            echo "Mock Key 成功路径测试失败（exit=$installer_status），末尾日志："
+            echo "无 Key 安装测试失败（exit=$installer_status），末尾日志："
             tail -n 40 "$output_file"
             exit 1
           fi
           grep -Fq 'Codex AI 安装完成' "$output_file" || { echo "未找到安装完成标记。"; exit 1; }
 
           config="$HOME/.codex/config.toml"
-          test -f "$config" || { echo "配置文件未生成：$config"; exit 1; }
-          grep -qi 'deepseek' "$config" || { echo "配置文件未指向 DeepSeek。"; exit 1; }
-          # CI 用 mock Key，验证 mock Key 被正确写入配置（证明 Step 5 完整跑通）
-          grep -Fq "sk-ci-mock-test-key-12345678901234567890" "$config" || { echo "配置文件未写入 Key（安装不完整）。"; exit 1; }
+          if [ -f "$config" ]; then
+            if grep -Eq '^[[:space:]]*\[model_providers\.deepseek\]' "$config"; then exit 1; fi
+            if grep -Eq '^[[:space:]]*experimental_bearer_token[[:space:]]*=' "$config"; then exit 1; fi
+          fi
+          echo "Test D passed (no key, full 6-step install)."
 
-          echo "Test D passed (mock DeepSeek key, full 7-step install)."
+      # 测试 E：独立配置器，沙箱中仅使用明确的 dummy Key，运行 1 次。
+      - name: Test standalone DeepSeek configurator
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOME="$(mktemp -d)"
+          unset CODEX_HOME THZ_DEEPSEEK_KEY
+          trap 'rm -rf "$HOME"' EXIT
+          mkdir -p "$HOME/.codex"
+          printf '%s\n' '# preserved configurator test' '[other]' 'value = "keep"' > "$HOME/.codex/config.toml"
+          printf '%s\n' 'sk-test-dummy-configurator-000000000000' |
+            bash mac-installer/configure-deepseek.sh --ci-key-stdin
+          config="$HOME/.codex/config.toml"
+          grep -Fq '[model_providers.deepseek]' "$config"
+          grep -Fq 'base_url = "https://api.deepseek.com"' "$config"
+          grep -Fq '# preserved configurator test' "$config"
+          grep -Fq '[other]' "$config"
+          bash mac-installer/configure-deepseek.sh --clear
+          if grep -Fq '[model_providers.deepseek]' "$config"; then exit 1; fi
+          grep -Fq '# preserved configurator test' "$config"
+          grep -Fq '[other]' "$config"
+          echo "Test E passed (1 iteration)."
 
       # 把本次运行产生的安装日志集中到 runner 临时目录，失败时上传。
       # （upload-artifact 的 path 对 ~ 展开不可靠，改用 runner.temp 下的绝对路径。）
